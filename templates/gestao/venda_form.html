@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+{% block title %}Nova venda · Sistema Mãe{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h1 class="h4 mb-4">Nova venda</h1>
+
+        {% if not form.fields.produto.queryset.exists %}
+          <div class="alert alert-warning">Você não tem itens com estoque disponível.
+            <a href="{% url 'gestao:produto_create' %}">Cadastre ou reponha um item</a>.</div>
+        {% endif %}
+        {% if not form.fields.cliente.queryset.exists %}
+          <div class="alert alert-warning">Cadastre um cliente antes de vender.
+            <a href="{% url 'gestao:cliente_create' %}">Novo cliente</a>.</div>
+        {% endif %}
+
+        <form method="post">
+          {% csrf_token %}
+          {% include 'partials/campos.html' %}
+          <div id="resumo-venda" class="alert alert-info py-2 small d-none" role="status"></div>
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">Finalizar venda</button>
+            <a href="{% url 'gestao:venda_list' %}" class="btn btn-outline-secondary">Cancelar</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{{ produtos_info|json_script:"produtos-info" }}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var info = JSON.parse(document.getElementById('produtos-info').textContent);
+  var selProduto = document.getElementById('id_produto');
+  var inpQtd = document.getElementById('id_quantidade');
+  var inpPreco = document.getElementById('id_preco_venda_praticado');
+  var resumo = document.getElementById('resumo-venda');
+
+  function brl(v) {
+    return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  }
+  function produtoAtual() { return info[selProduto.value] || null; }
+
+  // Apenas pré-visualização: o servidor recalcula total e lucro de forma definitiva.
+  function atualizarResumo() {
+    var p = produtoAtual();
+    var q = parseInt(inpQtd.value, 10);
+    var v = parseFloat(inpPreco.value);
+    if (!p || isNaN(q) || isNaN(v)) { resumo.classList.add('d-none'); return; }
+    var total = q * v;
+    var lucro = (v - parseFloat(p.custo)) * q;
+    resumo.textContent = 'Total: ' + brl(total) + '  ·  Lucro estimado: ' + brl(lucro) +
+                         '  ·  Estoque disponível: ' + p.estoque;
+    resumo.classList.remove('d-none');
+  }
+
+  selProduto.addEventListener('change', function () {
+    var p = produtoAtual();
+    if (p) {
+      inpPreco.value = p.preco_venda;   // sugere o preço cadastrado (editável)
+      inpQtd.max = p.estoque;
+    }
+    atualizarResumo();
+  });
+  inpQtd.addEventListener('input', atualizarResumo);
+  inpPreco.addEventListener('input', atualizarResumo);
+
+  var p0 = produtoAtual();
+  if (p0) {
+    if (!inpPreco.value) { inpPreco.value = p0.preco_venda; }
+    inpQtd.max = p0.estoque;
+  }
+  atualizarResumo();
+})();
+</script>
+{% endblock %}

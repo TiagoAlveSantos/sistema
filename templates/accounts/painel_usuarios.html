@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+{% block title %}Usuários · Sistema Mãe{% endblock %}
+
+{% block content %}
+<h1 class="h3 mb-1">Gerenciar usuários</h1>
+<p class="text-muted">Aprove ou reprove cadastros. Por segurança, o administrador não tem acesso aos
+  clientes, prospecções, estoque ou vendas dos usuários.</p>
+
+<ul class="nav nav-pills mb-3">
+  {% for valor, rotulo, total in abas %}
+    <li class="nav-item">
+      <a class="nav-link {% if valor == status_atual %}active{% endif %}" href="?status={{ valor }}">
+        {{ rotulo }} <span class="badge text-bg-light">{{ total }}</span>
+      </a>
+    </li>
+  {% endfor %}
+</ul>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Nome</th><th>Usuário</th><th>E-mail</th><th>Cadastro</th><th>Status</th>
+          <th class="text-end">Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for u in usuarios %}
+        <tr>
+          <td>{{ u.first_name|default:"—" }}</td>
+          <td>{{ u.username }}</td>
+          <td>{{ u.email }}</td>
+          <td>{{ u.date_joined|date:"d/m/Y H:i" }}</td>
+          <td>
+            {% if u.profile.status == 'approved' %}<span class="badge text-bg-success">Aprovado</span>
+            {% elif u.profile.status == 'rejected' %}<span class="badge text-bg-danger">Reprovado</span>
+            {% else %}<span class="badge text-bg-warning">Pendente</span>{% endif %}
+          </td>
+          <td class="text-end text-nowrap">
+            {% if u.profile.status != 'approved' %}
+              <form method="post" action="{% url 'accounts:aprovar' u.pk %}" class="d-inline">
+                {% csrf_token %}
+                <input type="hidden" name="status_atual" value="{{ status_atual }}">
+                <button type="submit" class="btn btn-success btn-sm">Aprovar</button>
+              </form>
+            {% endif %}
+            {% if u.profile.status != 'rejected' %}
+              <form method="post" action="{% url 'accounts:reprovar' u.pk %}" class="d-inline"
+                    onsubmit="return confirm('Reprovar este usuário? Ele perderá o acesso imediatamente.');">
+                {% csrf_token %}
+                <input type="hidden" name="status_atual" value="{{ status_atual }}">
+                <button type="submit" class="btn btn-outline-danger btn-sm">Reprovar</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="text-center text-muted py-4">Nenhum usuário nesta lista.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

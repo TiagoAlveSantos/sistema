@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Estoque · Sistema Mãe{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <h1 class="h3 mb-0">Estoque</h1>
+  <a href="{% url 'gestao:produto_create' %}" class="btn btn-primary">Novo item</a>
+</div>
+
+<form method="get" class="row g-2 mb-3">
+  <div class="col-sm-8 col-md-6">
+    <input type="search" name="q" value="{{ q }}" class="form-control" placeholder="Buscar item pelo nome">
+  </div>
+  <div class="col-auto"><button type="submit" class="btn btn-outline-secondary">Buscar</button></div>
+</form>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-striped table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr><th>Item</th><th class="text-end">Quantidade</th><th class="text-end">Custo</th><th class="text-end">Venda sugerida</th><th class="text-end">Margem</th><th class="text-end">Ações</th></tr>
+      </thead>
+      <tbody>
+      {% for p in object_list %}
+        <tr>
+          <td>{{ p.nome }}</td>
+          <td class="text-end">
+            {% if p.quantidade == 0 %}<span class="badge text-bg-danger">Sem estoque</span>
+            {% else %}{{ p.quantidade }}{% endif %}
+          </td>
+          <td class="text-end">R$ {{ p.preco_compra|floatformat:"2g" }}</td>
+          <td class="text-end">R$ {{ p.preco_venda|floatformat:"2g" }}</td>
+          <td class="text-end {% if p.margem_unitaria < 0 %}text-danger{% endif %}">R$ {{ p.margem_unitaria|floatformat:"2g" }}</td>
+          <td class="text-end"><a href="{% url 'gestao:produto_update' p.pk %}" class="btn btn-outline-primary btn-sm">Editar</a></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="text-center text-muted py-4">Nenhum item cadastrado.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% include 'partials/paginacao.html' %}
+{% endblock %}

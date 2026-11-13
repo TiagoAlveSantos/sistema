@@ -1,0 +1,17 @@
+# Sistema Mãe - dependências para Nuvem (Render + Neon)
+Django>=5.2,<5.3
+
+# Driver do PostgreSQL para conectar no Neon
+psycopg2-binary>=2.9.0
+
+# Ferramenta para ler a URL de conexão do banco de dados (DATABASE_URL)
+dj-database-url>=2.0.0
+
+# Servidor web de alta performance para produção no Render
+gunicorn>=21.2.0
+
+# Gerenciador de arquivos estáticos (CSS/JS) no Render
+whitenoise>=6.5.0
+
+# Banco de fusos horários
+tzdata
