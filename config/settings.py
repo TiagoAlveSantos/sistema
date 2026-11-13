@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles", # Necessário para arquivos estáticos
     "accounts.apps.AccountsConfig",
     "gestao.apps.GestaoConfig",
+    "axes",
 ]
 
 MIDDLEWARE = [
@@ -63,6 +64,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "axes.middleware.AxesMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -99,7 +102,11 @@ DATABASES = {
 # --------------------------------------------------------------------------
 # Autenticação
 # --------------------------------------------------------------------------
-AUTHENTICATION_BACKENDS = ["accounts.backends.ApprovedUserBackend"]
+AUTHENTICATION_BACKENDS = [
+    "axes.backends.AxesBackend", 
+    "django.contrib.auth.backends.ModelBackend",
+    "accounts.backends.ApprovedUserBackend",
+]
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -149,3 +156,13 @@ USE_THOUSAND_SEPARATOR = True
 MESSAGE_TAGS = {message_constants.ERROR: "danger"}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Número máximo de tentativas permitidas antes do bloqueio
+AXES_FAILURE_LIMIT = 5
+
+# Desbloqueia automaticamente após 30 minutos (0.5 hora)
+# Você pode usar números decimais (0.5 = 30 min) ou timedelta(minutes=30)
+AXES_COOLOFF_TIME = 0.5
+
+# Reseta o contador de erros assim que o usuário faz um login com sucesso
+AXES_RESET_ON_SUCCESS = True
