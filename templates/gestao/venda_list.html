@@ -7,11 +7,38 @@
   <a href="{% url 'gestao:venda_create' %}" class="btn btn-primary">Nova venda</a>
 </div>
 
+<!-- Formulário de Filtro por Cliente -->
+<form method="get" class="row g-3 mb-3">
+    <div class="col-auto">
+        <select name="cliente" class="form-select">
+            <option value="">-- Todos os Clientes --</option>
+            {% for c in clientes %}
+                <option value="{{ c.pk }}" {% if request.GET.cliente == c.pk|stringformat:"s" %}selected{% endif %}>
+                    {{ c.nome }}
+                </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-outline-primary">Filtrar</button>
+        <a href="{% url 'gestao:venda_list' %}" class="btn btn-outline-secondary">Limpar</a>
+    </div>
+</form>
+
 <div class="card shadow-sm">
   <div class="table-responsive">
     <table class="table table-striped table-hover align-middle mb-0">
       <thead class="table-light">
-        <tr><th>Data</th><th>Cliente</th><th>Item</th><th class="text-end">Qtd.</th><th class="text-end">Preço praticado</th><th class="text-end">Total</th><th class="text-end">Lucro</th></tr>
+        <tr>
+          <th>Data</th>
+          <th>Cliente</th>
+          <th>Item</th>
+          <th class="text-end">Qtd.</th>
+          <th class="text-end">Preço recomendado</th>
+          <th class="text-end">Total</th>
+          <th class="text-end">Lucro</th>
+          <th class="text-center">Ações</th>
+        </tr>
       </thead>
       <tbody>
       {% for v in object_list %}
@@ -20,12 +47,22 @@
           <td>{{ v.cliente.nome }}</td>
           <td>{{ v.produto.nome }}</td>
           <td class="text-end">{{ v.quantidade }}</td>
-          <td class="text-end">R$ {{ v.preco_venda_praticado|floatformat:"2g" }}</td>
+          <td class="text-end">R$ {{ v.produto.preco_venda|floatformat:"2g" }}</td>
           <td class="text-end">R$ {{ v.total|floatformat:"2g" }}</td>
           <td class="text-end {% if v.lucro < 0 %}text-danger{% else %}text-success{% endif %}">R$ {{ v.lucro|floatformat:"2g" }}</td>
+          <td class="text-center">
+            <div class="btn-group btn-group-sm" role="group">
+              <a href="{% url 'gestao:venda_update' v.pk %}" class="btn btn-outline-primary" title="Editar">
+                <i class="bi bi-pencil"></i> Editar
+              </a>
+              <a href="{% url 'gestao:venda_delete' v.pk %}" class="btn btn-outline-danger" title="Reverter / Estornar">
+                <i class="bi bi-arrow-counterclockwise"></i> Reverter
+              </a>
+            </div>
+          </td>
         </tr>
       {% empty %}
-        <tr><td colspan="7" class="text-center text-muted py-4">Nenhuma venda registrada ainda.</td></tr>
+        <tr><td colspan="8" class="text-center text-muted py-4">Nenhuma venda registrada ainda.</td></tr>
       {% endfor %}
       </tbody>
     </table>

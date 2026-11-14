@@ -2,6 +2,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.contrib import messages
+from django.http import HttpResponseRedirect
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
@@ -9,14 +10,14 @@ from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.utils.formats import number_format
-from django.views.generic import CreateView, FormView, ListView, UpdateView
+from django.views.generic import CreateView, FormView, ListView, UpdateView, DeleteView
 
 from accounts.permissions import UsuarioComumMixin
 
 from .forms import ClienteForm, ProdutoForm, ProspeccaoForm, VendaForm
 from .mixins import DonoFormMixin, DonoQuerysetMixin
 from .models import Cliente, Produto, Prospeccao, Venda
-from .services import EstoqueInsuficiente, registrar_venda
+from .services import EstoqueInsuficiente, registrar_venda, estornar_venda
 
 
 # ==========================================================================
@@ -269,7 +270,21 @@ class VendaListView(DonoQuerysetMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        return super().get_queryset().select_related("cliente", "produto")
+        # Pega o queryset base (já filtrado pelo DonoQuerysetMixin) com os selects otimizados
+        queryset = super().get_queryset().select_related("cliente", "produto")
+        
+        # Captura o ID do cliente enviado pelo filtro da URL (?cliente=X)
+        cliente_id = self.request.GET.get("cliente")
+        if cliente_id:
+            queryset = queryset.filter(cliente_id=cliente_id)
+            
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # Passa apenas os clientes do usuário logado para preencher o menu <select>
+        ctx["clientes"] = Cliente.objects.filter(usuario=self.request.user).order_by("nome")
+        return ctx
 
 
 class VendaCreateView(UsuarioComumMixin, FormView):
@@ -303,6 +318,7 @@ class VendaCreateView(UsuarioComumMixin, FormView):
                 produto=form.cleaned_data["produto"],
                 quantidade=form.cleaned_data["quantidade"],
                 preco_venda_praticado=form.cleaned_data["preco_venda_praticado"],
+                data_venda=form.cleaned_data.get("data_venda"), # Passa a data retroativa se preenchida
             )
         except EstoqueInsuficiente:
             form.add_error("quantidade", "Estoque insuficiente para esta venda.")
@@ -314,3 +330,33 @@ class VendaCreateView(UsuarioComumMixin, FormView):
             f"Venda registrada. Estoque atualizado. Lucro líquido: R$ {lucro}.",
         )
         return super().form_valid(form)
+    
+class VendaUpdateView(DonoQuerysetMixin, UpdateView):
+    model = Venda
+    form_class = VendaForm
+    template_name = "gestao/venda_form.html"
+    success_url = reverse_lazy("gestao:venda_list")
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["usuario"] = self.request.user
+        return kwargs
+
+    def form_valid(self, form):
+        messages.success(self.request, "Venda atualizada com sucesso!")
+        return super().form_valid(form)
+
+
+class VendaDeleteView(DonoQuerysetMixin, DeleteView):
+    model = Venda
+    template_name = "gestao/venda_confirm_delete.html"
+    success_url = reverse_lazy("gestao:venda_list")
+
+    def form_valid(self, form):
+        try:
+            estornar_venda(usuario=self.request.user, venda=self.object)
+            messages.success(self.request, "Venda revertida com sucesso! Os produtos retornaram ao estoque.")
+        except Exception as e:
+            messages.error(self.request, f"Erro ao reverter venda: {e}")
+            return redirect("gestao:venda_list")
+        return HttpResponseRedirect(self.success_url)

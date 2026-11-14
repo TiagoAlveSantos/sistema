@@ -3,9 +3,12 @@ from decimal import Decimal
 
 from django import forms
 
+from django.utils import timezone
+
 from accounts.forms import BootstrapFormMixin
 
-from .models import Cliente, Produto, Prospeccao
+from .models import Cliente, Produto, Prospeccao, Venda
+
 
 _TELEFONE_RE = re.compile(r"^[0-9+()\-\s.]{6,30}$")
 
@@ -30,7 +33,7 @@ class UsuarioModelForm(BootstrapFormMixin, forms.ModelForm):
 class ClienteForm(UsuarioModelForm):
     class Meta:
         model = Cliente
-        fields = ["nome", "contato", "email", "telefone", "endereco"]
+        fields = ["nome", "cpf", "email", "telefone", "endereco"]
 
     def clean_telefone(self):
         return _validar_telefone(self.cleaned_data.get("telefone"))
@@ -87,42 +90,71 @@ class ProdutoForm(UsuarioModelForm):
         }
 
 
-class VendaForm(BootstrapFormMixin, forms.Form):
-    cliente = forms.ModelChoiceField(
-        queryset=Cliente.objects.none(), label="Cliente", empty_label="Selecione..."
-    )
-    produto = forms.ModelChoiceField(
-        queryset=Produto.objects.none(),
-        label="Item do estoque",
-        empty_label="Selecione...",
-    )
-    quantidade = forms.IntegerField(label="Quantidade", min_value=1)
-    preco_venda_praticado = forms.DecimalField(
-        label="Preço de venda praticado (R$)",
-        min_value=Decimal("0.01"),
-        max_digits=12,
-        decimal_places=2,
-        help_text="Vem preenchido com o preço sugerido do item; você pode alterá-lo.",
-    )
+class VendaForm(UsuarioModelForm):
+    class Meta:
+        model = Venda
+        fields = ["cliente", "produto", "quantidade", "preco_venda_praticado", "data_venda"]
+        widgets = {
+            "data_venda": forms.TextInput(
+                attrs={"class": "form-control"}
+            ),
+        }
+        labels = {
+            "preco_venda_praticado": "Preço de venda praticado (R$)",
+            "data_venda": "Data e Hora da Venda",
+        }
 
-    def __init__(self, *args, usuario, **kwargs):
-        self.usuario = usuario
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["cliente"].queryset = Cliente.objects.do_usuario(usuario)
-        self.fields["produto"].queryset = Produto.objects.do_usuario(usuario).filter(
-            quantidade__gt=0
-        )
+        
+        self.fields["cliente"].queryset = Cliente.objects.do_usuario(self.usuario)
+        self.fields["cliente"].empty_label = "Selecione..."
+
+        self.fields["produto"].empty_label = "Selecione..."
         self.fields["produto"].label_from_instance = (
             lambda p: f"{p.nome} (estoque: {p.quantidade})"
         )
+
+        # Se for EDIÇÃO
+        if self.instance.pk:
+            # Trava o campo de produto para não ser alterado
+            self.fields["produto"].disabled = True
+            self.fields["produto"].queryset = Produto.objects.do_usuario(self.usuario)
+            
+            # Formata a data existente para o calendário Flatpickr conseguir exibir
+            if self.instance.data_venda:
+                self.fields["data_venda"].initial = timezone.localtime(self.instance.data_venda).strftime("%Y-%m-%d %H:%M")
+        else:
+            # Se for NOVA VENDA
+            self.fields["produto"].queryset = Produto.objects.do_usuario(self.usuario).filter(
+                quantidade__gt=0
+            )
+            agora_str = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
+            if "data_venda" in self.fields:
+                self.fields["data_venda"].initial = agora_str
+
+        # Trava para não aceitar datas futuras no atributo max do HTML
+        if "data_venda" in self.fields:
+            agora_str_max = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
+            self.fields["data_venda"].widget.attrs["max"] = agora_str_max
 
     def clean(self):
         cleaned = super().clean()
         produto = cleaned.get("produto")
         quantidade = cleaned.get("quantidade")
-        if produto and quantidade and quantidade > produto.quantidade:
+        data_venda = cleaned.get("data_venda")
+
+        # Validação de estoque apenas para NOVAS vendas
+        if not self.instance.pk and produto and quantidade and quantidade > produto.quantidade:
             self.add_error(
                 "quantidade",
                 f"Estoque insuficiente. Disponível: {produto.quantidade}.",
             )
+
+        if data_venda and data_venda > timezone.now():
+            self.add_error(
+                "data_venda",
+                "A data da venda não pode ser no futuro.",
+            )
+
         return cleaned

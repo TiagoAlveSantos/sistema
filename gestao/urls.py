@@ -2,6 +2,7 @@ from django.urls import path
 
 from . import views
 
+
 app_name = "gestao"
 
 urlpatterns = [
@@ -37,4 +38,6 @@ urlpatterns = [
     # Vendas
     path("vendas/", views.VendaListView.as_view(), name="venda_list"),
     path("vendas/nova/", views.VendaCreateView.as_view(), name="venda_create"),
+    path("vendas/<int:pk>/editar/", views.VendaUpdateView.as_view(), name="venda_update"),
+    path("vendas/<int:pk>/excluir/", views.VendaDeleteView.as_view(), name="venda_delete"),
 ]

@@ -24,11 +24,16 @@ def _fk_usuario(related_name):
 class Cliente(models.Model):
     usuario = _fk_usuario("clientes")
     nome = models.CharField("Nome", max_length=150)
-    contato = models.CharField("Pessoa de contato", max_length=150, blank=True)
     email = models.EmailField("E-mail", blank=True)
     telefone = models.CharField("Telefone", max_length=30, blank=True)
     endereco = models.CharField("Endereço", max_length=255, blank=True)
     criado_em = models.DateTimeField(auto_now_add=True)
+    cpf = models.CharField(
+        max_length=14, 
+        blank=True, 
+        null=True, 
+        verbose_name="CPF"
+    )
 
     objects = DonoQuerySet.as_manager()
 
@@ -63,7 +68,7 @@ class Prospeccao(models.Model):
     data_contato = models.DateField("Data do contato", default=timezone.localdate)
     data_novo_contato = models.DateField("Data do novo contato", null=True, blank=True)
     telefone = models.CharField("Telefone", max_length=30, blank=True)
-    criado_em = models.DateTimeField(auto_now_add=True)
+    data_venda = models.DateTimeField(default=timezone.now, verbose_name="Data da Venda")
 
     objects = DonoQuerySet.as_manager()
 
