@@ -64,7 +64,6 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
     "axes.middleware.AxesMiddleware",
 ]
 
@@ -96,6 +95,7 @@ DATABASES = {
     "default": dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
         conn_max_age=600,
+        conn_health_checks=True,
     )
 }
 
@@ -103,9 +103,8 @@ DATABASES = {
 # Autenticação
 # --------------------------------------------------------------------------
 AUTHENTICATION_BACKENDS = [
-    "axes.backends.AxesBackend", 
+    "axes.backends.AxesBackend",
     "django.contrib.auth.backends.ModelBackend",
-    "accounts.backends.ApprovedUserBackend",
 ]
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -133,7 +132,7 @@ SESSION_COOKIE_AGE = 60 * 60 * 8  # 8 horas
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SAMESIP = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
@@ -166,3 +165,6 @@ AXES_COOLOFF_TIME = 0.5
 
 # Reseta o contador de erros assim que o usuário faz um login com sucesso
 AXES_RESET_ON_SUCCESS = True
+
+#Remove o log dele para tentar deixar mais rápido
+AXES_DISABLE_ACCESS_LOG = True

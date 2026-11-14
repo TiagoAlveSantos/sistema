@@ -106,7 +106,7 @@ class VendaForm(UsuarioModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         self.fields["cliente"].queryset = Cliente.objects.do_usuario(self.usuario)
         self.fields["cliente"].empty_label = "Selecione..."
 
@@ -115,17 +115,46 @@ class VendaForm(UsuarioModelForm):
             lambda p: f"{p.nome} (estoque: {p.quantidade})"
         )
 
-        # Se for EDIÇÃO
+        # Usado pela view de edição (resumo do formulário)
+        self.info_edicao = None
+
         if self.instance.pk:
-            # Trava o campo de produto para não ser alterado
-            self.fields["produto"].disabled = True
+            # ---------------- EDIÇÃO ----------------
+            produto = self.instance.produto
+            # Quantidade da venda como está no banco (antes de qualquer alteração)
+            self._quantidade_original = self.instance.quantidade
+            # O máximo permitido = o que sobrou no estoque + o que esta venda já usa
+            self.estoque_disponivel = produto.quantidade + self._quantidade_original
+
+            # O produto não pode ser trocado
             self.fields["produto"].queryset = Produto.objects.do_usuario(self.usuario)
-            
-            # Formata a data existente para o calendário Flatpickr conseguir exibir
-            if self.instance.data_venda:
-                self.fields["data_venda"].initial = timezone.localtime(self.instance.data_venda).strftime("%Y-%m-%d %H:%M")
+            self.fields["produto"].disabled = True
+
+            # Quantidade: editável só se ainda houver estoque deste produto
+            self.fields["quantidade"].widget.attrs["max"] = self.estoque_disponivel
+            if produto.quantidade == 0:
+                self.fields["quantidade"].disabled = True
+                self.fields["quantidade"].help_text = (
+                    "Sem estoque deste item: a quantidade está bloqueada. "
+                    "Para desfazer a venda, use Reverter."
+                )
+            else:
+                self.fields["quantidade"].help_text = (
+                    f"Você pode vender até {self.estoque_disponivel} unidades nesta venda."
+                )
+
+            # Mantém a data original no campo (self.initial tem prioridade sobre field.initial)
+            self.initial["data_venda"] = timezone.localtime(
+                self.instance.data_venda
+            ).strftime("%Y-%m-%d %H:%M")
+
+            self.info_edicao = {
+                "preco_venda": str(produto.preco_venda),
+                "custo": str(self.instance.preco_compra_unitario),
+                "estoque": self.estoque_disponivel,
+            }
         else:
-            # Se for NOVA VENDA
+            # ---------------- NOVA VENDA ----------------
             self.fields["produto"].queryset = Produto.objects.do_usuario(self.usuario).filter(
                 quantidade__gt=0
             )
@@ -144,12 +173,20 @@ class VendaForm(UsuarioModelForm):
         quantidade = cleaned.get("quantidade")
         data_venda = cleaned.get("data_venda")
 
-        # Validação de estoque apenas para NOVAS vendas
-        if not self.instance.pk and produto and quantidade and quantidade > produto.quantidade:
-            self.add_error(
-                "quantidade",
-                f"Estoque insuficiente. Disponível: {produto.quantidade}.",
-            )
+        if produto and quantidade:
+            if self.instance.pk:
+                # Edição: pode usar o estoque atual + o que a própria venda já ocupa
+                limite = produto.quantidade + self._quantidade_original
+                if quantidade > limite:
+                    self.add_error(
+                        "quantidade",
+                        f"Estoque insuficiente. O máximo para esta venda é {limite}.",
+                    )
+            elif quantidade > produto.quantidade:
+                self.add_error(
+                    "quantidade",
+                    f"Estoque insuficiente. Disponível: {produto.quantidade}.",
+                )
 
         if data_venda and data_venda > timezone.now():
             self.add_error(

@@ -17,7 +17,7 @@ from accounts.permissions import UsuarioComumMixin
 from .forms import ClienteForm, ProdutoForm, ProspeccaoForm, VendaForm
 from .mixins import DonoFormMixin, DonoQuerysetMixin
 from .models import Cliente, Produto, Prospeccao, Venda
-from .services import EstoqueInsuficiente, registrar_venda, estornar_venda
+from .services import EstoqueInsuficiente, registrar_venda, estornar_venda, atualizar_venda
 
 
 # ==========================================================================
@@ -115,7 +115,7 @@ class ClienteListView(DonoQuerysetMixin, ListView):
         if self.busca:
             qs = qs.filter(
                 Q(nome__icontains=self.busca)
-                | Q(contato__icontains=self.busca)
+                | Q(cpf__icontains=self.busca)
                 | Q(email__icontains=self.busca)
                 | Q(telefone__icontains=self.busca)
             )
@@ -274,9 +274,9 @@ class VendaListView(DonoQuerysetMixin, ListView):
         queryset = super().get_queryset().select_related("cliente", "produto")
         
         # Captura o ID do cliente enviado pelo filtro da URL (?cliente=X)
-        cliente_id = self.request.GET.get("cliente")
-        if cliente_id:
-            queryset = queryset.filter(cliente_id=cliente_id)
+        cliente_id = self.request.GET.get("cliente", "")
+        if cliente_id.isdigit():
+            queryset = queryset.filter(cliente_id=int(cliente_id))
             
         return queryset
 
@@ -342,10 +342,30 @@ class VendaUpdateView(DonoQuerysetMixin, UpdateView):
         kwargs["usuario"] = self.request.user
         return kwargs
 
-    def form_valid(self, form):
-        messages.success(self.request, "Venda atualizada com sucesso!")
-        return super().form_valid(form)
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        form = ctx["form"]
+        # Dados do produto desta venda para o resumo em tempo real do formulário
+        ctx["produtos_info"] = {str(form.instance.produto_id): form.info_edicao}
+        return ctx
 
+    def form_valid(self, form):
+        # NÃO chamamos super().form_valid(): ele salvaria direto, sem ajustar o estoque.
+        try:
+            atualizar_venda(
+                usuario=self.request.user,
+                venda_id=self.object.pk,
+                cliente=form.cleaned_data["cliente"],
+                quantidade=form.cleaned_data["quantidade"],
+                preco_venda_praticado=form.cleaned_data["preco_venda_praticado"],
+                data_venda=form.cleaned_data.get("data_venda"),
+            )
+        except EstoqueInsuficiente:
+            form.add_error("quantidade", "Estoque insuficiente para esta alteração.")
+            return self.form_invalid(form)
+
+        messages.success(self.request, "Venda atualizada e estoque ajustado com sucesso!")
+        return HttpResponseRedirect(self.get_success_url())
 
 class VendaDeleteView(DonoQuerysetMixin, DeleteView):
     model = Venda
