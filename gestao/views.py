@@ -1,17 +1,17 @@
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+
 
 from django.contrib import messages
 from django.http import HttpResponseRedirect
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, DecimalField, Q, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Count, DecimalField, ProtectedError, ExpressionWrapper, F, Q, Sum, Value
+from django.db.models.functions import Coalesce, TruncMonth
 from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.utils.formats import number_format
 from django.views.generic import CreateView, FormView, ListView, UpdateView, DeleteView
-from django.db.models import ProtectedError
 
 from accounts.permissions import UsuarioComumMixin
 
@@ -36,24 +36,23 @@ def _proximo_mes(d):
     return (d.replace(day=28) + timedelta(days=4)).replace(day=1)
 
 
-def _meses_disponiveis(usuario):
-    """Do mês atual até o mês de criação da conta (mais recente primeiro)."""
-    atual = timezone.localdate().replace(day=1)
-    inicio = timezone.localtime(usuario.date_joined).date().replace(day=1)
-    meses = []
-    while atual >= inicio:
-        meses.append(atual)
-        atual = (atual - timedelta(days=1)).replace(day=1)
-    return meses or [timezone.localdate().replace(day=1)]
+def _periodos_com_venda(usuario):
+    """Lista de (ano, mês) com pelo menos uma venda, do mais recente ao mais antigo."""
+    datas = (
+        Venda.objects.do_usuario(usuario)
+        .annotate(m=TruncMonth("data_venda"))
+        .values_list("m", flat=True)
+        .distinct()
+        .order_by("-m")
+    )
+    return [(d.year, d.month) for d in datas]
 
 
-def _interpretar_mes(valor, meses):
-    """Aceita 'AAAA-MM' apenas se estiver entre os meses permitidos."""
+def _inteiro_ou_none(valor):
     try:
-        escolhido = datetime.strptime(valor or "", "%Y-%m").date()
-    except ValueError:
-        return meses[0]
-    return escolhido if escolhido in meses else meses[0]
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
 
 
 @login_required
@@ -62,45 +61,89 @@ def dashboard(request):
     if usuario.is_superuser:
         return redirect("accounts:painel")
 
-    meses = _meses_disponiveis(usuario)
-    mes = _interpretar_mes(request.GET.get("mes"), meses)
-    proximo = _proximo_mes(mes)
+    periodos = _periodos_com_venda(usuario)
+    anos = sorted({a for a, _ in periodos}, reverse=True)
 
-    tz = timezone.get_current_timezone()
-    inicio_dt = datetime.combine(mes, time.min, tzinfo=tz)
-    fim_dt = datetime.combine(proximo, time.min, tzinfo=tz)
+    # ---- Interpreta os filtros (valores inválidos viram "todos") ----
+    if "ano" not in request.GET:
+        # Padrão: mês mais recente com venda (ou o mês atual, se não há vendas)
+        hoje = timezone.localdate()
+        ano, mes = periodos[0] if periodos else (hoje.year, hoje.month)
+    else:
+        ano = _inteiro_ou_none(request.GET.get("ano"))
+        if ano not in anos:
+            ano = None
+        mes = _inteiro_ou_none(request.GET.get("mes"))
+        if ano is None or (ano, mes) not in periodos:
+            mes = None
 
-    vendas_mes = Venda.objects.do_usuario(usuario).filter(
-        data_venda__gte=inicio_dt, data_venda__lt=fim_dt
-    )
-    resumo = vendas_mes.aggregate(
+    # Se o padrão caiu num ano sem venda (conta nova), garante a lista de anos
+    if ano is not None and ano not in anos:
+        anos = [ano] + anos
+    meses = sorted({m for a, m in periodos if a == ano}, reverse=True) if ano else []
+    if mes is not None and mes not in meses:
+        meses = sorted(meses + [mes], reverse=True)
+
+    # ---- Período para filtrar ----
+    vendas = Venda.objects.do_usuario(usuario)
+    prospeccoes = Prospeccao.objects.do_usuario(usuario)
+    clientes = Cliente.objects.do_usuario(usuario)
+
+    if ano is not None:
+        if mes is not None:
+            inicio = date(ano, mes, 1)
+            fim = _proximo_mes(inicio)
+            sufixo, sufixo_clientes = " no mês", " (até o fim do mês)"
+        else:
+            inicio, fim = date(ano, 1, 1), date(ano + 1, 1, 1)
+            sufixo, sufixo_clientes = " no ano", " (até o fim do ano)"
+        tz = timezone.get_current_timezone()
+        inicio_dt = datetime.combine(inicio, time.min, tzinfo=tz)
+        fim_dt = datetime.combine(fim, time.min, tzinfo=tz)
+        vendas = vendas.filter(data_venda__gte=inicio_dt, data_venda__lt=fim_dt)
+        prospeccoes = prospeccoes.filter(data_contato__gte=inicio, data_contato__lt=fim)
+        clientes = clientes.filter(criado_em__lt=fim_dt)
+    else:
+        sufixo, sufixo_clientes = "", ""
+
+    resumo = vendas.aggregate(
         total_vendas=_soma("total"),
         total_lucro=_soma("lucro"),
         clientes_compradores=Count("cliente", distinct=True),
     )
-    qtd_prospeccoes = (
-        Prospeccao.objects.do_usuario(usuario)
-        .filter(data_contato__gte=mes, data_contato__lt=proximo)
-        .count()
-    )
-    total_clientes = (
-        Cliente.objects.do_usuario(usuario).filter(criado_em__lt=fim_dt).count()
-    )
+
+    # Valor atual do estoque, ao custo de aquisição (não depende do período)
+    valor_estoque = Produto.objects.do_usuario(usuario).aggregate(
+        total=Coalesce(
+            Sum(
+                ExpressionWrapper(
+                    F("quantidade") * F("preco_compra"),
+                    output_field=DecimalField(max_digits=14, decimal_places=2),
+                )
+            ),
+            Value(Decimal("0.00")),
+            output_field=DecimalField(max_digits=14, decimal_places=2),
+        )
+    )["total"]
 
     return render(
         request,
         "gestao/dashboard.html",
         {
-            "meses": meses,
+            "anos": anos,
+            "ano_selecionado": ano,
+            "meses": [date(ano, m, 1) for m in meses] if ano else [],
             "mes_selecionado": mes,
+            "sufixo": sufixo,
+            "sufixo_clientes": sufixo_clientes,
             "total_vendas": resumo["total_vendas"],
             "total_lucro": resumo["total_lucro"],
             "clientes_compradores": resumo["clientes_compradores"],
-            "qtd_prospeccoes": qtd_prospeccoes,
-            "total_clientes": total_clientes,
+            "qtd_prospeccoes": prospeccoes.count(),
+            "total_clientes": clientes.count(),
+            "valor_estoque": valor_estoque,
         },
     )
-
 
 # ==========================================================================
 # Clientes
