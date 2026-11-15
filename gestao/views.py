@@ -11,6 +11,7 @@ from django.urls import reverse_lazy
 from django.utils import timezone
 from django.utils.formats import number_format
 from django.views.generic import CreateView, FormView, ListView, UpdateView, DeleteView
+from django.db.models import ProtectedError
 
 from accounts.permissions import UsuarioComumMixin
 
@@ -260,6 +261,25 @@ class ProdutoUpdateView(DonoFormMixin, UpdateView):
         "voltar_url": reverse_lazy("gestao:produto_list"),
     }
 
+
+class ProdutoDeleteView(DonoQuerysetMixin, DeleteView):
+    model = Produto
+    template_name = "gestao/produto_confirm_delete.html"
+    success_url = reverse_lazy("gestao:produto_list")
+
+    def form_valid(self, form):
+        nome = self.object.nome
+        try:
+            self.object.delete()
+        except ProtectedError:
+            messages.error(
+                self.request,
+                f"Não é possível excluir “{nome}”: já existem vendas deste item. "
+                "Se não quiser mais vendê-lo, edite e deixe a quantidade em 0.",
+            )
+            return redirect("gestao:produto_list")
+        messages.success(self.request, f"Item “{nome}” excluído do estoque.")
+        return HttpResponseRedirect(self.success_url)
 
 # ==========================================================================
 # Vendas

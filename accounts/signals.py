@@ -8,7 +8,7 @@ from .models import UserProfile
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def criar_perfil(sender, instance, created, **kwargs):
     """Cria o perfil: pendente para usuários comuns, aprovado para superusuários."""
-    if created:
+    if created and not kwargs.get("raw"):  # raw=True: loaddata/fixtures
         status = (
             UserProfile.Status.APPROVED
             if instance.is_superuser

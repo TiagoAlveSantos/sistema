@@ -31,7 +31,10 @@
           <td class="text-end">R$ {{ p.preco_compra|floatformat:"2g" }}</td>
           <td class="text-end">R$ {{ p.preco_venda|floatformat:"2g" }}</td>
           <td class="text-end {% if p.margem_unitaria < 0 %}text-danger{% endif %}">R$ {{ p.margem_unitaria|floatformat:"2g" }}</td>
-          <td class="text-end"><a href="{% url 'gestao:produto_update' p.pk %}" class="btn btn-outline-primary btn-sm">Editar</a></td>
+          <td class="text-end text-nowrap">
+            <a href="{% url 'gestao:produto_update' p.pk %}" class="btn btn-outline-primary btn-sm">Editar</a>
+            <a href="{% url 'gestao:produto_delete' p.pk %}" class="btn btn-outline-danger btn-sm">Excluir</a>
+          </td>
         </tr>
       {% empty %}
         <tr><td colspan="6" class="text-center text-muted py-4">Nenhum item cadastrado.</td></tr>

@@ -2,9 +2,10 @@ from django.test import Client, TestCase
 from django.urls import reverse
 
 from .models import UserProfile
-from .testutils import SENHA, User, criar_admin, criar_usuario
+from .testutils import SENHA, User, criar_admin, criar_usuario, sem_axes
 
 
+@sem_axes
 class RegistroEAprovacaoTests(TestCase):
     def test_registro_cria_usuario_pendente(self):
         resp = self.client.post(
@@ -109,3 +110,17 @@ class RegistroEAprovacaoTests(TestCase):
         resp = cliente_web.get(reverse("gestao:cliente_list"))
         self.assertEqual(resp.status_code, 302)
         self.assertIn(reverse("accounts:login"), resp["Location"])
+
+
+class ConfiguracaoSegurancaTests(TestCase):
+    """Garante que ninguém reabra o contorno da aprovação por engano."""
+
+    def test_modelbackend_puro_nao_pode_estar_configurado(self):
+        from django.conf import settings
+
+        self.assertNotIn(
+            "django.contrib.auth.backends.ModelBackend", settings.AUTHENTICATION_BACKENDS
+        )
+        self.assertIn(
+            "accounts.backends.ApprovedUserBackend", settings.AUTHENTICATION_BACKENDS
+        )

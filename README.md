@@ -88,4 +88,4 @@ Software **de código disponível, com royalties em caso de uso comercial** — 
 
 ## Créditos
 
-Autor: Tiago Alves Santos. Desenvolvido com auxílio de Claude (Anthropic) e Gemini (Google).
+Autor: Tiago Alves dos Santos. Desenvolvido com auxílio de Claude (Anthropic) e Gemini (Google).

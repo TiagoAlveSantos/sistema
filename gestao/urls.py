@@ -35,6 +35,11 @@ urlpatterns = [
         views.ProdutoUpdateView.as_view(),
         name="produto_update",
     ),
+    path(
+        "estoque/<int:pk>/excluir/",
+        views.ProdutoDeleteView.as_view(),
+        name="produto_delete",
+    ),
     # Vendas
     path("vendas/", views.VendaListView.as_view(), name="venda_list"),
     path("vendas/nova/", views.VendaCreateView.as_view(), name="venda_create"),
