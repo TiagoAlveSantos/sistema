@@ -25,8 +25,9 @@ def _obter_secret_key():
 
 SECRET_KEY = _obter_secret_key()
 
-# Seguro por padrão: DEBUG desligado no Render, ligado localmente se solicitado.
-DEBUG = 'RENDER' not in os.environ
+# Seguro por padrão: DEBUG sempre desligado. Para depurar localmente, defina
+# a variável de ambiente DJANGO_DEBUG=1 (nunca no Render).
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 
 # Host permitidos (Render + Local)
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
@@ -104,7 +105,9 @@ DATABASES = {
 # --------------------------------------------------------------------------
 AUTHENTICATION_BACKENDS = [
     "axes.backends.AxesBackend",
-    "django.contrib.auth.backends.ModelBackend",
+    # Só autentica usuários ATIVOS e APROVADOS. NÃO adicione o ModelBackend
+    # puro aqui: ele deixaria usuários pendentes/reprovados fazerem login.
+    "accounts.backends.ApprovedUserBackend",
 ]
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -123,7 +126,11 @@ LOGOUT_REDIRECT_URL = "accounts:login"
 # --------------------------------------------------------------------------
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# (STATICFILES_STORAGE foi removido no Django 5.1; o correto agora é STORAGES.)
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 # --------------------------------------------------------------------------
 # Sessão / cookies
@@ -142,6 +149,15 @@ if 'RENDER' in os.environ:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_SSL_REDIRECT = True
+    # O Render termina o HTTPS no proxy e avisa por este cabeçalho.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    CSRF_TRUSTED_ORIGINS = (
+        [f"https://{RENDER_EXTERNAL_HOSTNAME}"] if RENDER_EXTERNAL_HOSTNAME else []
+    )
+    # Atrás do proxy do Render o IP real vem em X-Forwarded-For (1 proxy);
+    # sem isso o Axes bloquearia o IP do proxy (todos os usuários juntos).
+    AXES_IPWARE_PROXY_COUNT = 1
+    AXES_IPWARE_META_PRECEDENCE_ORDER = ("HTTP_X_FORWARDED_FOR", "REMOTE_ADDR")
 
 # --------------------------------------------------------------------------
 # Internacionalização

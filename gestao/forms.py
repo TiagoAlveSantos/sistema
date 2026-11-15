@@ -22,6 +22,21 @@ def _validar_telefone(valor):
     return valor
 
 
+def _validar_cpf(valor):
+    """Aceita só dígitos ou com pontuação; valida os dígitos verificadores
+    e devolve no formato 000.000.000-00 (ou None se vazio)."""
+    digitos = re.sub(r"\D", "", valor or "")
+    if not digitos:
+        return None
+    if len(digitos) != 11 or digitos == digitos[0] * 11:
+        raise forms.ValidationError("CPF inválido.")
+    for i in (9, 10):
+        soma = sum(int(digitos[n]) * (i + 1 - n) for n in range(i))
+        if (soma * 10) % 11 % 10 != int(digitos[i]):
+            raise forms.ValidationError("CPF inválido.")
+    return f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
+
+
 class UsuarioModelForm(BootstrapFormMixin, forms.ModelForm):
     """ModelForm que recebe o usuário logado (usado para filtrar os campos de relação)."""
 
@@ -34,6 +49,23 @@ class ClienteForm(UsuarioModelForm):
     class Meta:
         model = Cliente
         fields = ["nome", "cpf", "email", "telefone", "endereco"]
+        widgets = {
+            "cpf": forms.TextInput(
+                attrs={"placeholder": "000.000.000-00", "inputmode": "numeric"}
+            ),
+        }
+
+    def clean_cpf(self):
+        cpf = _validar_cpf(self.cleaned_data.get("cpf"))
+        if (
+            cpf
+            and Cliente.objects.do_usuario(self.usuario)
+            .filter(cpf=cpf)
+            .exclude(pk=self.instance.pk)
+            .exists()
+        ):
+            raise forms.ValidationError("Você já tem um cliente cadastrado com este CPF.")
+        return cpf
 
     def clean_telefone(self):
         return _validar_telefone(self.cleaned_data.get("telefone"))

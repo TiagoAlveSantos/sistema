@@ -68,7 +68,6 @@ class Prospeccao(models.Model):
     data_contato = models.DateField("Data do contato", default=timezone.localdate)
     data_novo_contato = models.DateField("Data do novo contato", null=True, blank=True)
     telefone = models.CharField("Telefone", max_length=30, blank=True)
-    data_venda = models.DateTimeField(default=timezone.now, verbose_name="Data da Venda")
 
     objects = DonoQuerySet.as_manager()
 

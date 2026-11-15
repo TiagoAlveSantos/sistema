@@ -63,8 +63,6 @@
 {% endblock %}
 
 {% block scripts %}
-<!-- Importa o CSS do Flatpickr -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 <!-- Importa os scripts do Flatpickr e a tradução para português -->
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/pt.js"></script>
@@ -72,13 +70,17 @@
 <script>
 (function () {
   // Inicializa o Flatpickr forçando o padrão brasileiro visualmente
-  flatpickr("#id_data_venda", {
+  var campoData = document.getElementById("id_data_venda");
+  flatpickr(campoData, {
     enableTime: true,
+    time_24hr: true,
     dateFormat: "Y-m-d H:i",      // Formato técnico enviado para o Django por trás dos panos
     altInput: true,              // Cria a caixinha visual amigável
     altFormat: "d/m/Y H:i",      // O que você VÊ e DIGITA: Dia / Mês / Ano e Horário
     locale: "pt",                // Traduz os meses e dias para o português
-    maxDate: "today"             // Trava datas futuras
+    maxDate: new Date(),         // Trava datas futuras (considera a hora atual)
+    allowInvalidPreload: true,   // Nunca apaga a data já gravada ao abrir a edição
+    defaultDate: campoData.value || null
   });
 
   var info = JSON.parse(document.getElementById('produtos-info').textContent);

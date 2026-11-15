@@ -1,86 +1,91 @@
 # Sistema Mãe
 
-Sistema web (Django 5.2 LTS + SQLite) para gestão de clientes, prospecções, estoque e vendas, com
-aprovação de usuários pelo administrador e **isolamento total de dados entre usuários**.
+Sistema web multiusuário para pequenos vendedores (revendedores de cosméticos, por exemplo) gerenciarem **clientes, prospecções, estoque e vendas**, com painel de métricas mensais. Cada usuário enxerga **somente os próprios dados** e novos cadastros só entram depois de aprovados por um administrador.
 
-## Instalação no Windows
+> Desenvolvido com apoio de IA: o código foi construído com **Claude** (Anthropic) e **Gemini** (Google), com revisão e decisões de projeto do autor.
 
-Pré-requisito: Python 3.10 ou superior (marque *Add python.exe to PATH* ao instalar).
+## Funcionalidades
 
-1. Dê dois cliques em **`install.bat`**. Ele cria o `venv`, instala o `requirements.txt`, roda as
-   migrações e pergunta se você quer criar o primeiro Administrador.
-2. Para usar, dê dois cliques em **`run.bat`** (abre o servidor em <http://127.0.0.1:8000/> e o navegador).
+- **Cadastro com aprovação:** todo novo usuário nasce *pendente* e não consegue entrar até o administrador aprovar (ou reprovar — o que derruba também sessões abertas).
+- **Painel do administrador** (`/contas/painel/`): só gerencia usuários. O administrador **não vê** clientes, prospecções, estoque nem vendas de ninguém.
+- **Isolamento total de dados:** todo registro pertence a um usuário; acessar o registro de outro retorna 404.
+- **Clientes:** nome, CPF (validado e único por usuário), e-mail, telefone, endereço, busca.
+- **Prospecções:** vinculadas a um cliente, com status, datas de contato/novo contato e telefone.
+- **Estoque:** quantidade, preço de compra e preço de venda sugerido.
+- **Vendas:** escolha do item, preço editável na hora, data/hora (inclusive retroativa), débito automático do estoque e lucro = (preço praticado − custo) × quantidade. O custo unitário fica gravado na venda, então alterar o custo depois não muda o histórico.
+  - **Edição:** produto e data originais são mantidos; a quantidade só pode mudar se houver estoque (o estoque é ajustado pela diferença).
+  - **Reverter:** devolve a quantidade ao estoque.
+- **Dashboard:** vendas, lucro, prospecções, total de clientes e clientes distintos que compraram no mês, com seletor de mês (a partir da criação da conta).
 
-Sem o instalador: `python -m venv venv`, `venv\Scripts\activate`, `pip install -r requirements.txt`,
-`python manage.py migrate`, `python manage.py createsuperuser`, `python manage.py runserver`.
+## Tecnologias
 
-## Como funciona o acesso
+Python · Django 5.2 LTS · PostgreSQL (Neon) em produção / SQLite local · Gunicorn · WhiteNoise · django-axes · Bootstrap 5 (CDN) · Flatpickr (CDN).
 
-- Qualquer pessoa pode se cadastrar em `/contas/registro/`, mas a conta **nasce pendente** e não consegue entrar.
-- O Administrador (superusuário) entra e vê o menu **Usuários** (`/contas/painel/`), com abas
-  Pendentes / Aprovados / Reprovados e botões Aprovar / Reprovar.
-- Reprovar derruba a sessão do usuário na hora (o backend de login é revalidado a cada requisição).
-- O Administrador **não acessa** clientes, prospecções, estoque nem vendas: esses módulos redirecionam
-  superusuários ao painel, e nenhum modelo de negócio é exposto (o Django Admin nem está instalado).
+## Segurança
+
+- CSRF, XSS (autoescape), SQL Injection (ORM) e hash de senhas nativos do Django.
+- Bloqueio por tentativas de login (django-axes: 5 falhas, 30 min).
+- Backend de autenticação próprio (`ApprovedUserBackend`) que só aceita usuários aprovados.
+- Operações de venda atômicas, com `UPDATE` condicional de estoque (seguro contra concorrência).
+- Em produção: cookies seguros, redirecionamento HTTPS e `DEBUG` desligado.
+- `django.contrib.admin` **não** está instalado, de propósito.
+
+## Variáveis de ambiente
+
+| Variável | Uso |
+|---|---|
+| `DATABASE_URL` | URL do PostgreSQL (Neon). Sem ela, usa SQLite local. |
+| `DJANGO_SECRET_KEY` | Chave secreta (obrigatória em produção). |
+| `DJANGO_DEBUG` | `1` ativa o modo debug (apenas local). |
+| `DJANGO_ALLOWED_HOSTS` | Hosts extras, separados por vírgula. |
+| `RENDER` / `RENDER_EXTERNAL_HOSTNAME` | Definidas automaticamente pelo Render. |
+
+## Rodando localmente
+
+**Linux/macOS**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py createsuperuser   # administrador
+python manage.py runserver
+```
+
+**Windows:** execute `install.bat` (cria o venv, instala dependências, migra o banco e oferece criar o administrador) e depois `run.bat`.
+
+Acesse http://127.0.0.1:8000/. Cadastre um usuário comum pela tela de registro e aprove-o logado como administrador.
+
+## Testes
+
+```bash
+python manage.py test
+```
+
+## Deploy (Render + Neon)
+
+1. Crie o projeto no **Neon** e copie a `DATABASE_URL`.
+2. No **Render**, crie um *Web Service* a partir deste repositório:
+   - Build: `pip install -r requirements.txt && python manage.py migrate`
+   - Start: `gunicorn config.wsgi`
+   - Variáveis: `DATABASE_URL`, `DJANGO_SECRET_KEY`.
+3. Crie o administrador uma vez (`python manage.py createsuperuser`) no Shell ou localmente apontando para a mesma `DATABASE_URL`.
+
+**Dica de desempenho:** escolha a região do banco e a do servidor próximas (ex.: ambos em *US East*). Bancos e servidores em regiões distantes deixam o login lento, pois cada consulta paga a latência. No plano gratuito o servidor "dorme" após inatividade e o primeiro acesso demora.
 
 ## Estrutura
 
 ```
-sistema_mae/
-├── manage.py
-├── requirements.txt
-├── install.bat / run.bat
-├── config/            settings.py (seguro por padrão), urls.py, wsgi.py
-├── accounts/          cadastro, login, aprovação
-│   ├── models.py        UserProfile (status: pending/approved/rejected)
-│   ├── signals.py       cria o perfil (pendente; superusuário nasce aprovado)
-│   ├── backends.py      só autentica usuários aprovados
-│   ├── permissions.py   superuser_required, usuario_comum_required, mixin
-│   ├── forms.py / views.py / urls.py
-├── gestao/            módulos de negócio
-│   ├── models.py        Cliente, Prospeccao, Produto, Venda (+ DonoQuerySet.do_usuario)
-│   ├── services.py      registrar_venda() atômica
-│   ├── mixins.py        isolamento por usuário nas views
-│   ├── forms.py / views.py / urls.py
-└── templates/         base.html (Bootstrap 5), partials/, accounts/, gestao/, 403/404/500
+config/      configurações, URLs, WSGI
+accounts/    cadastro, login, aprovação, painel do admin
+gestao/      clientes, prospecções, estoque, vendas, dashboard
+templates/   HTML (Bootstrap)
 ```
 
-## Segurança e isolamento
+## Licença
 
-- **CSRF, XSS, SQL Injection e hash de senha**: middleware CSRF e `{% csrf_token %}` em todo POST; autoescape
-  dos templates; ORM parametrizado; PBKDF2 do Django + validadores de senha.
-- **Isolamento**: todo modelo de negócio tem `usuario` (FK, `editable=False`). As views filtram por
-  `do_usuario(request.user)`, então o registro de outro usuário responde **404**. O dono é sempre
-  `request.user`, nunca vem do POST. Campos de relação (cliente na prospecção/venda, item na venda) só
-  aceitam registros do próprio usuário.
-- **Login obrigatório** em todas as views (`login_required` / `LoginRequiredMixin`); ações do painel só por
-  POST e só para superusuário.
-- **SECRET_KEY** gerada na primeira execução e guardada em `.secret_key`; `DEBUG` desligado por padrão
-  (`DJANGO_DEBUG=1` para depurar); `ALLOWED_HOSTS` restrito a localhost.
+Software **de código disponível, com royalties em caso de uso comercial** — leia o arquivo [LICENSE](LICENSE). Uso pessoal e educacional é gratuito.
 
-## Regras de negócio
+## Créditos
 
-- **Venda** (`gestao/services.py`): em uma transação, debita o estoque com `UPDATE` condicional
-  (impede estoque negativo mesmo com duas vendas simultâneas), grava o custo unitário do momento e calcula
-  `lucro = (preço praticado − preço de compra) × quantidade`. O preço sugerido vem do cadastro e pode ser alterado.
-- **Dashboard**: vendas, lucro, prospecções (por data do contato) e clientes compradores distintos no mês
-  escolhido. O seletor lista do mês atual até o mês de criação da conta. "Clientes cadastrados" conta os
-  cadastrados até o fim do mês selecionado (no mês atual, é o total).
-- Não há exclusão de clientes, itens ou vendas, de propósito: preserva o histórico e a consistência do estoque.
-
-## Testes
-
-```
-venv\Scripts\activate
-python manage.py test
-```
-
-Cobrem aprovação/bloqueio de login, derrubada de sessão ao reprovar, isolamento entre usuários,
-bloqueio do superusuário nos módulos de negócio, venda (estoque e lucro) e métricas do dashboard.
-
-## Limitações conhecidas
-
-- O isolamento é **na aplicação**: quem tiver acesso ao arquivo `db.sqlite3` no disco consegue ler tudo.
-- O visual usa Bootstrap via CDN, então precisa de internet no navegador.
-- Não há bloqueio por tentativas de login; para exposição fora do localhost, considere `django-axes`,
-  HTTPS e um servidor de produção (o `runserver` é só para uso local).
+Autor: Tiago Alves Santos. Desenvolvido com auxílio de Claude (Anthropic) e Gemini (Google).
