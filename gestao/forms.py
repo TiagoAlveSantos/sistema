@@ -123,107 +123,124 @@ class ProdutoForm(UsuarioModelForm):
 
 
 class VendaForm(UsuarioModelForm):
+    """Cabeçalho da venda: cliente e data. Os itens vão no formset abaixo."""
+
     class Meta:
         model = Venda
-        fields = ["cliente", "produto", "quantidade", "preco_venda_praticado", "data_venda"]
+        fields = ["cliente", "data_venda"]
         widgets = {
-            "data_venda": forms.TextInput(
-                attrs={"class": "form-control"}
-            ),
+            "data_venda": forms.TextInput(attrs={"class": "form-control"}),
         }
-        labels = {
-            "preco_venda_praticado": "Preço de venda praticado (R$)",
-            "data_venda": "Data e Hora da Venda",
-        }
+        labels = {"data_venda": "Data e Hora da Venda"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         self.fields["cliente"].queryset = Cliente.objects.do_usuario(self.usuario)
         self.fields["cliente"].empty_label = "Selecione..."
 
-        self.fields["produto"].empty_label = "Selecione..."
+        agora_str = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
+        if self.instance.pk:
+            # Edição: mantém a data original no campo (self.initial vence field.initial)
+            self.initial["data_venda"] = timezone.localtime(
+                self.instance.data_venda
+            ).strftime("%Y-%m-%d %H:%M")
+        else:
+            self.fields["data_venda"].initial = agora_str
+        self.fields["data_venda"].widget.attrs["max"] = agora_str
+
+    def clean_data_venda(self):
+        data_venda = self.cleaned_data.get("data_venda")
+        if data_venda and data_venda > timezone.now():
+            raise forms.ValidationError("A data da venda não pode ser no futuro.")
+        return data_venda
+
+
+class ItemVendaForm(BootstrapFormMixin, forms.Form):
+    """
+    Uma linha da venda. Linhas já existentes (edição) trazem `item_id`: nelas só
+    quantidade e preço mudam, e o produto enviado é IGNORADO (o serviço usa o
+    produto gravado no item). Linhas novas exigem o produto.
+    """
+
+    item_id = forms.IntegerField(required=False, widget=forms.HiddenInput)
+    produto = forms.ModelChoiceField(
+        queryset=Produto.objects.none(),
+        required=False,
+        empty_label="Selecione o item...",
+        label="Item",
+    )
+    quantidade = forms.IntegerField(
+        min_value=1, label="Qtd.", widget=forms.NumberInput(attrs={"min": "1"})
+    )
+    preco_venda_praticado = forms.DecimalField(
+        min_value=0,
+        max_digits=12,
+        decimal_places=2,
+        label="Preço (R$)",
+        widget=forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
+    )
+
+    def __init__(self, *args, usuario, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Só itens DO usuário e com estoque: IDs de outros usuários são rejeitados.
+        qs = Produto.objects.do_usuario(usuario).filter(quantidade__gt=0)
+        self.fields["produto"].queryset = qs
         self.fields["produto"].label_from_instance = (
             lambda p: f"{p.nome} (estoque: {p.quantidade})"
         )
 
-        # Usado pela view de edição (resumo do formulário)
-        self.info_edicao = None
-
-        if self.instance.pk:
-            # ---------------- EDIÇÃO ----------------
-            produto = self.instance.produto
-            # Quantidade da venda como está no banco (antes de qualquer alteração)
-            self._quantidade_original = self.instance.quantidade
-            # O máximo permitido = o que sobrou no estoque + o que esta venda já usa
-            self.estoque_disponivel = produto.quantidade + self._quantidade_original
-
-            # O produto não pode ser trocado
-            self.fields["produto"].queryset = Produto.objects.do_usuario(self.usuario)
-            self.fields["produto"].disabled = True
-
-            # Quantidade: editável só se ainda houver estoque deste produto
-            self.fields["quantidade"].widget.attrs["max"] = self.estoque_disponivel
-            if produto.quantidade == 0:
-                self.fields["quantidade"].disabled = True
-                self.fields["quantidade"].help_text = (
-                    "Sem estoque deste item: a quantidade está bloqueada. "
-                    "Para desfazer a venda, use Reverter."
-                )
-            else:
-                self.fields["quantidade"].help_text = (
-                    f"Você pode vender até {self.estoque_disponivel} unidades nesta venda."
-                )
-
-            # Mantém a data original no campo (self.initial tem prioridade sobre field.initial)
-            self.initial["data_venda"] = timezone.localtime(
-                self.instance.data_venda
-            ).strftime("%Y-%m-%d %H:%M")
-
-            self.info_edicao = {
-                "preco_venda": str(produto.preco_venda),
-                "custo": str(self.instance.preco_compra_unitario),
-                "estoque": self.estoque_disponivel,
-            }
-        else:
-            # ---------------- NOVA VENDA ----------------
-            self.fields["produto"].queryset = Produto.objects.do_usuario(self.usuario).filter(
-                quantidade__gt=0
-            )
-            agora_str = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
-            if "data_venda" in self.fields:
-                self.fields["data_venda"].initial = agora_str
-
-        # Trava para não aceitar datas futuras no atributo max do HTML
-        if "data_venda" in self.fields:
-            agora_str_max = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
-            self.fields["data_venda"].widget.attrs["max"] = agora_str_max
-
     def clean(self):
         cleaned = super().clean()
-        produto = cleaned.get("produto")
-        quantidade = cleaned.get("quantidade")
-        data_venda = cleaned.get("data_venda")
-
-        if produto and quantidade:
-            if self.instance.pk:
-                # Edição: pode usar o estoque atual + o que a própria venda já ocupa
-                limite = produto.quantidade + self._quantidade_original
-                if quantidade > limite:
-                    self.add_error(
-                        "quantidade",
-                        f"Estoque insuficiente. O máximo para esta venda é {limite}.",
-                    )
-            elif quantidade > produto.quantidade:
-                self.add_error(
-                    "quantidade",
-                    f"Estoque insuficiente. Disponível: {produto.quantidade}.",
-                )
-
-        if data_venda and data_venda > timezone.now():
-            self.add_error(
-                "data_venda",
-                "A data da venda não pode ser no futuro.",
-            )
-
+        if not cleaned.get("item_id") and not cleaned.get("produto"):
+            self.add_error("produto", "Selecione o item.")
         return cleaned
+
+
+class BaseItemVendaFormSet(forms.BaseFormSet):
+    def clean(self):
+        if any(self.errors):
+            return
+        produtos = set()
+        total = 0
+        for form in self.forms:
+            dados = getattr(form, "cleaned_data", None)
+            if not dados:  # linha vazia (extra não preenchida)
+                continue
+            total += 1
+            produto = dados.get("produto")
+            if produto and not dados.get("item_id"):
+                if produto.pk in produtos:
+                    raise forms.ValidationError(
+                        f"O item “{produto.nome}” aparece mais de uma vez. "
+                        "Some as quantidades numa só linha."
+                    )
+                produtos.add(produto.pk)
+        if total == 0:
+            raise forms.ValidationError("Adicione pelo menos um item à venda.")
+
+
+# Nova venda: começa com 1 linha. Edição: só as linhas existentes (o resto é por JS).
+ItemVendaFormSet = forms.formset_factory(
+    ItemVendaForm, formset=BaseItemVendaFormSet, extra=1
+)
+ItemVendaFormSetEdicao = forms.formset_factory(
+    ItemVendaForm, formset=BaseItemVendaFormSet, extra=0
+)
+
+
+def itens_da_formset(formset):
+    """Converte as linhas válidas do formset na lista esperada pelos serviços."""
+    itens = []
+    for form in formset.forms:
+        dados = getattr(form, "cleaned_data", None)
+        if not dados:
+            continue
+        itens.append(
+            {
+                "item_id": dados.get("item_id"),
+                "produto": dados.get("produto"),
+                "quantidade": dados["quantidade"],
+                "preco": dados["preco_venda_praticado"],
+            }
+        )
+    return itens

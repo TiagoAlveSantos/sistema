@@ -45,4 +45,9 @@ urlpatterns = [
     path("vendas/nova/", views.VendaCreateView.as_view(), name="venda_create"),
     path("vendas/<int:pk>/editar/", views.VendaUpdateView.as_view(), name="venda_update"),
     path("vendas/<int:pk>/excluir/", views.VendaDeleteView.as_view(), name="venda_delete"),
+    path(
+        "vendas/item/<int:pk>/reverter/",
+        views.ItemVendaDeleteView.as_view(),
+        name="item_venda_delete",
+    ),
 ]

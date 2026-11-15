@@ -46,6 +46,7 @@
         <form method="post" action="{% url 'accounts:logout' %}" class="d-flex align-items-center gap-2">
           {% csrf_token %}
           <span class="navbar-text small">{{ user.get_username }}{% if user.is_superuser %} (admin){% endif %}</span>
+          <a href="{% url 'accounts:trocar_senha' %}" class="btn btn-link btn-sm text-light text-decoration-none">Alterar senha</a>
           <button type="submit" class="btn btn-outline-light btn-sm">Sair</button>
         </form>
       {% else %}

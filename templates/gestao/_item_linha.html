@@ -1,0 +1,34 @@
+{# Uma linha de item da venda. Contexto: form (ItemVendaForm). #}
+<div class="item-linha border rounded p-2 mb-2"
+     {% if form.initial.custo %}data-custo="{{ form.initial.custo }}"{% endif %}
+     {% if form.initial.max_qtd %}data-max="{{ form.initial.max_qtd|stringformat:'d' }}"{% endif %}>
+  {{ form.item_id }}
+  <div class="row g-2 align-items-start">
+    <div class="col-12 col-md-5">
+      <label class="form-label small mb-1">Item</label>
+      {% if form.initial.item_id %}
+        <div class="fw-semibold py-1">{{ form.initial.nome_produto }}</div>
+        <div class="form-text mt-0">Item fixo. Para tirá-lo da venda, use “Reverter” na lista de vendas.</div>
+      {% else %}
+        {{ form.produto }}
+      {% endif %}
+      {% for erro in form.produto.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small mb-1">Qtd.</label>
+      {{ form.quantidade }}
+      {% for erro in form.quantidade.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small mb-1">Preço unitário (R$)</label>
+      {{ form.preco_venda_praticado }}
+      {% for erro in form.preco_venda_praticado.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+    </div>
+    <div class="col-12 col-md-2 text-md-end pt-md-4">
+      <div class="small text-muted linha-total mb-1"></div>
+      {% if not form.initial.item_id %}
+        <button type="button" class="btn btn-outline-danger btn-sm btn-remover-linha">Remover</button>
+      {% endif %}
+    </div>
+  </div>
+</div>

@@ -7,18 +7,33 @@ from django.http import HttpResponseRedirect
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, DecimalField, ProtectedError, ExpressionWrapper, F, Q, Sum, Value
 from django.db.models.functions import Coalesce, TruncMonth
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.utils.formats import number_format
-from django.views.generic import CreateView, FormView, ListView, UpdateView, DeleteView
+from django.views.generic import CreateView, DeleteView, ListView, UpdateView, View
 
 from accounts.permissions import UsuarioComumMixin
 
-from .forms import ClienteForm, ProdutoForm, ProspeccaoForm, VendaForm
+from .forms import (
+    ClienteForm,
+    ItemVendaFormSet,
+    ItemVendaFormSetEdicao,
+    ProdutoForm,
+    ProspeccaoForm,
+    VendaForm,
+    itens_da_formset,
+)
 from .mixins import DonoFormMixin, DonoQuerysetMixin
-from .models import Cliente, Produto, Prospeccao, Venda
-from .services import EstoqueInsuficiente, registrar_venda, estornar_venda, atualizar_venda
+from .models import Cliente, ItemVenda, Produto, Prospeccao, Venda
+from .services import (
+    EstoqueInsuficiente,
+    VendaInvalida,
+    atualizar_venda,
+    estornar_item,
+    estornar_venda,
+    registrar_venda,
+)
 
 
 # ==========================================================================
@@ -333,113 +348,208 @@ class VendaListView(DonoQuerysetMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        # Pega o queryset base (já filtrado pelo DonoQuerysetMixin) com os selects otimizados
-        queryset = super().get_queryset().select_related("cliente", "produto")
-        
-        # Captura o ID do cliente enviado pelo filtro da URL (?cliente=X)
+        # Queryset base (já filtrado pelo DonoQuerysetMixin) com os itens pré-carregados
+        queryset = (
+            super()
+            .get_queryset()
+            .select_related("cliente")
+            .prefetch_related("itens__produto")
+        )
+
+        # Filtro por cliente (?cliente=X); valor inválido é ignorado
         cliente_id = self.request.GET.get("cliente", "")
         if cliente_id.isdigit():
             queryset = queryset.filter(cliente_id=int(cliente_id))
-            
+
         return queryset
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        # Passa apenas os clientes do usuário logado para preencher o menu <select>
-        ctx["clientes"] = Cliente.objects.filter(usuario=self.request.user).order_by("nome")
+        # Apenas os clientes do usuário logado no <select>
+        ctx["clientes"] = Cliente.objects.do_usuario(self.request.user).order_by("nome")
         return ctx
 
 
-class VendaCreateView(UsuarioComumMixin, FormView):
-    template_name = "gestao/venda_form.html"
-    form_class = VendaForm
-    success_url = reverse_lazy("gestao:venda_list")
-
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["usuario"] = self.request.user
-        return kwargs
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        # Dados dos itens do próprio usuário, para sugerir o preço no formulário.
-        ctx["produtos_info"] = {
-            str(p.pk): {
-                "preco_venda": str(p.preco_venda),
-                "custo": str(p.preco_compra),
-                "estoque": p.quantidade,
-            }
-            for p in ctx["form"].fields["produto"].queryset
+def _produtos_info(usuario):
+    """Dados dos itens do usuário (com estoque) para sugerir o preço no formulário."""
+    return {
+        str(p.pk): {
+            "preco_venda": str(p.preco_venda),
+            "custo": str(p.preco_compra),
+            "estoque": p.quantidade,
         }
-        return ctx
+        for p in Produto.objects.do_usuario(usuario).filter(quantidade__gt=0)
+    }
 
-    def form_valid(self, form):
-        try:
-            venda = registrar_venda(
-                usuario=self.request.user,
-                cliente=form.cleaned_data["cliente"],
-                produto=form.cleaned_data["produto"],
-                quantidade=form.cleaned_data["quantidade"],
-                preco_venda_praticado=form.cleaned_data["preco_venda_praticado"],
-                data_venda=form.cleaned_data.get("data_venda"), # Passa a data retroativa se preenchida
-            )
-        except EstoqueInsuficiente:
-            form.add_error("quantidade", "Estoque insuficiente para esta venda.")
-            return self.form_invalid(form)
 
+class _VendaFormularioView(UsuarioComumMixin, View):
+    """Base das telas de nova venda e de edição (cabeçalho + itens)."""
+
+    template_name = "gestao/venda_form.html"
+    success_url = reverse_lazy("gestao:venda_list")
+    venda = None  # None = nova venda
+
+    def _forms(self, request, data=None):
+        raise NotImplementedError
+
+    def _render(self, request, form, formset):
+        return render(
+            request,
+            self.template_name,
+            {
+                "form": form,
+                "formset": formset,
+                "object": self.venda,
+                "produtos_info": _produtos_info(request.user),
+                "tem_produtos": bool(Produto.objects.do_usuario(request.user).filter(quantidade__gt=0).exists()
+                                      or (self.venda and self.venda.itens.exists())),
+                "tem_clientes": form.fields["cliente"].queryset.exists(),
+            },
+        )
+
+    def get(self, request, *args, **kwargs):
+        form, formset = self._forms(request)
+        return self._render(request, form, formset)
+
+    def post(self, request, *args, **kwargs):
+        form, formset = self._forms(request, request.POST)
+        if form.is_valid() and formset.is_valid():
+            try:
+                resposta = self._salvar(request, form, formset)
+            except EstoqueInsuficiente as e:
+                form.add_error(None, str(e))
+            except VendaInvalida as e:
+                form.add_error(None, str(e))
+            else:
+                return resposta
+        return self._render(request, form, formset)
+
+
+class VendaCreateView(_VendaFormularioView):
+    def _forms(self, request, data=None):
+        form = VendaForm(data, usuario=request.user)
+        formset = ItemVendaFormSet(
+            data, prefix="itens", form_kwargs={"usuario": request.user}
+        )
+        return form, formset
+
+    def _salvar(self, request, form, formset):
+        venda = registrar_venda(
+            usuario=request.user,
+            cliente=form.cleaned_data["cliente"],
+            itens=itens_da_formset(formset),
+            data_venda=form.cleaned_data.get("data_venda"),
+        )
         lucro = number_format(venda.lucro, 2, use_l10n=True, force_grouping=True)
         messages.success(
-            self.request,
-            f"Venda registrada. Estoque atualizado. Lucro líquido: R$ {lucro}.",
+            request,
+            f"Venda registrada com {venda.itens.count()} item(ns). "
+            f"Estoque atualizado. Lucro líquido: R$ {lucro}.",
         )
-        return super().form_valid(form)
-    
-class VendaUpdateView(DonoQuerysetMixin, UpdateView):
-    model = Venda
-    form_class = VendaForm
-    template_name = "gestao/venda_form.html"
-    success_url = reverse_lazy("gestao:venda_list")
+        return HttpResponseRedirect(self.success_url)
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["usuario"] = self.request.user
-        return kwargs
 
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        form = ctx["form"]
-        # Dados do produto desta venda para o resumo em tempo real do formulário
-        ctx["produtos_info"] = {str(form.instance.produto_id): form.info_edicao}
-        return ctx
-
-    def form_valid(self, form):
-        # NÃO chamamos super().form_valid(): ele salvaria direto, sem ajustar o estoque.
-        try:
-            atualizar_venda(
-                usuario=self.request.user,
-                venda_id=self.object.pk,
-                cliente=form.cleaned_data["cliente"],
-                quantidade=form.cleaned_data["quantidade"],
-                preco_venda_praticado=form.cleaned_data["preco_venda_praticado"],
-                data_venda=form.cleaned_data.get("data_venda"),
+class VendaUpdateView(_VendaFormularioView):
+    def dispatch(self, request, *args, **kwargs):
+        # Só carrega a venda se o usuário for o dono (senão 404)
+        if request.user.is_authenticated and not request.user.is_superuser:
+            self.venda = get_object_or_404(
+                Venda.objects.do_usuario(request.user), pk=kwargs["pk"]
             )
-        except EstoqueInsuficiente:
-            form.add_error("quantidade", "Estoque insuficiente para esta alteração.")
-            return self.form_invalid(form)
+        return super().dispatch(request, *args, **kwargs)
 
-        messages.success(self.request, "Venda atualizada e estoque ajustado com sucesso!")
-        return HttpResponseRedirect(self.get_success_url())
+    def _initial_itens(self):
+        """Uma linha por item já gravado (produto e custo ficam fixos)."""
+        linhas = []
+        for item in self.venda.itens.select_related("produto"):
+            linhas.append(
+                {
+                    "item_id": item.pk,
+                    "quantidade": item.quantidade,
+                    "preco_venda_praticado": item.preco_venda_praticado,
+                    "nome_produto": item.produto.nome,
+                    "custo": str(item.preco_compra_unitario),
+                    # máximo = o que sobrou no estoque + o que o item já ocupa
+                    "max_qtd": item.produto.quantidade + item.quantidade,
+                }
+            )
+        return linhas
+
+    def _forms(self, request, data=None):
+        form = VendaForm(data, instance=self.venda, usuario=request.user)
+        formset = ItemVendaFormSetEdicao(
+            data,
+            initial=self._initial_itens(),
+            prefix="itens",
+            form_kwargs={"usuario": request.user},
+        )
+        return form, formset
+
+    def _salvar(self, request, form, formset):
+        atualizar_venda(
+            usuario=request.user,
+            venda_id=self.venda.pk,
+            cliente=form.cleaned_data["cliente"],
+            data_venda=form.cleaned_data.get("data_venda"),
+            itens=itens_da_formset(formset),
+        )
+        messages.success(request, "Venda atualizada e estoque ajustado com sucesso!")
+        return HttpResponseRedirect(self.success_url)
+
 
 class VendaDeleteView(DonoQuerysetMixin, DeleteView):
+    """Reverte a venda INTEIRA (todos os itens voltam ao estoque)."""
+
     model = Venda
     template_name = "gestao/venda_confirm_delete.html"
     success_url = reverse_lazy("gestao:venda_list")
 
+    def get_queryset(self):
+        return super().get_queryset().prefetch_related("itens__produto")
+
     def form_valid(self, form):
         try:
             estornar_venda(usuario=self.request.user, venda=self.object)
-            messages.success(self.request, "Venda revertida com sucesso! Os produtos retornaram ao estoque.")
+            messages.success(
+                self.request,
+                "Venda revertida com sucesso! Os produtos retornaram ao estoque.",
+            )
         except Exception as e:
             messages.error(self.request, f"Erro ao reverter venda: {e}")
             return redirect("gestao:venda_list")
+        return HttpResponseRedirect(self.success_url)
+
+
+class ItemVendaDeleteView(DonoQuerysetMixin, DeleteView):
+    """Reverte UM item da venda (se for o único, reverte a venda inteira)."""
+
+    model = ItemVenda
+    template_name = "gestao/item_venda_confirm_delete.html"
+    success_url = reverse_lazy("gestao:venda_list")
+
+    def get_queryset(self):
+        return super().get_queryset().select_related("venda__cliente", "produto")
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["unico_item"] = self.object.venda.itens.count() <= 1
+        return ctx
+
+    def form_valid(self, form):
+        try:
+            venda_inteira = estornar_item(
+                usuario=self.request.user, item_id=self.object.pk
+            )
+        except Exception as e:
+            messages.error(self.request, f"Erro ao reverter o item: {e}")
+            return redirect("gestao:venda_list")
+        if venda_inteira:
+            messages.success(
+                self.request,
+                "Era o único item: a venda foi revertida por completo e o estoque devolvido.",
+            )
+        else:
+            messages.success(
+                self.request, "Item revertido e devolvido ao estoque. Totais da venda atualizados."
+            )
         return HttpResponseRedirect(self.success_url)

@@ -8,10 +8,14 @@
       <div class="card-body p-4 text-center">
         <h1 class="h4 text-danger mb-3">Reverter Venda</h1>
         <p class="text-muted">
-          Tem certeza que deseja reverter a venda de <strong>{{ object.quantidade }}x {{ object.produto.nome }}</strong> para <strong>{{ object.cliente.nome }}</strong>?
+          Tem certeza que deseja reverter a venda inteira de <strong>{{ object.cliente.nome }}</strong>
+          ({{ object.data_venda|date:"d/m/Y H:i" }})?
         </p>
+        <ul class="list-unstyled small mb-3">
+          {% for i in object.itens.all %}<li>{{ i.quantidade }}x {{ i.produto.nome }}</li>{% endfor %}
+        </ul>
         <p class="small text-danger mb-4">
-          Esta ação apagará o registro da venda e <strong>devolverá os itens automaticamente para o estoque</strong>.
+          Esta ação apagará o registro da venda e <strong>devolverá todos os itens automaticamente para o estoque</strong>.
         </p>
 
         <form method="post">

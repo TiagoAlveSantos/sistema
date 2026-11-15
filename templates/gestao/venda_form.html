@@ -1,53 +1,58 @@
 {% extends 'base.html' %}
-{% block title %}Nova venda · Sistema Mãe{% endblock %}
+{% block title %}{% if object %}Editar venda{% else %}Nova venda{% endif %} · Sistema Mãe{% endblock %}
 
-<!-- Importa o CSS do Flatpickr no topo ou dentro da página -->
 {% block extra_head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 {% endblock %}
 
 {% block content %}
 <div class="row justify-content-center">
-  <div class="col-lg-7">
+  <div class="col-lg-9">
     <div class="card shadow-sm">
       <div class="card-body p-4">
         <h1 class="h4 mb-4">{% if object %}Editar venda{% else %}Nova venda{% endif %}</h1>
 
-        {% if not form.fields.produto.queryset.exists %}
+        {% if not tem_produtos %}
           <div class="alert alert-warning">Você não tem itens com estoque disponível.
             <a href="{% url 'gestao:produto_create' %}">Cadastre ou reponha um item</a>.</div>
         {% endif %}
-        {% if not form.fields.cliente.queryset.exists %}
+        {% if not tem_clientes %}
           <div class="alert alert-warning">Cadastre um cliente antes de vender.
             <a href="{% url 'gestao:cliente_create' %}">Novo cliente</a>.</div>
         {% endif %}
 
-        <form method="post">
+        {% if form.non_field_errors or formset.non_form_errors %}
+          <div class="alert alert-danger" role="alert">
+            {% for erro in form.non_field_errors %}<div>{{ erro }}</div>{% endfor %}
+            {% for erro in formset.non_form_errors %}<div>{{ erro }}</div>{% endfor %}
+          </div>
+        {% endif %}
+
+        <form method="post" id="form-venda">
           {% csrf_token %}
-          
-          <!-- Campo de Data da Venda -->
-          <div class="mb-3">
-            <label for="{{ form.data_venda.id_for_label }}" class="form-label">Data e Hora da Venda</label>
-            {{ form.data_venda }}
-            {% if form.data_venda.errors %}
-              <div class="text-danger small mt-1">{{ form.data_venda.errors }}</div>
-            {% endif %}
-            <div class="form-text">Deixe com a data/hora atual ou selecione uma data retroativa.</div>
+
+          <div class="row g-3 mb-3">
+            <div class="col-md-6">
+              <label for="{{ form.cliente.id_for_label }}" class="form-label">Cliente</label>
+              {{ form.cliente }}
+              {% for erro in form.cliente.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+            </div>
+            <div class="col-md-6">
+              <label for="{{ form.data_venda.id_for_label }}" class="form-label">Data e Hora da Venda</label>
+              {{ form.data_venda }}
+              {% for erro in form.data_venda.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+              <div class="form-text">Deixe a data/hora atual ou escolha uma data retroativa.</div>
+            </div>
           </div>
 
-          <!-- Demais campos do formulário -->
-          {% for field in form %}
-            {% if field.name != 'data_venda' %}
-              <div class="mb-3">
-                <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
-                {{ field }}
-                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
-                {% if field.errors %}
-                  <div class="text-danger small mt-1">{{ field.errors }}</div>
-                {% endif %}
-              </div>
-            {% endif %}
-          {% endfor %}
+          <h2 class="h6 mt-4 mb-2">Itens da venda</h2>
+          {{ formset.management_form }}
+          <div id="itens-container">
+            {% for f in formset %}
+              {% include 'gestao/_item_linha.html' with form=f %}
+            {% endfor %}
+          </div>
+          <button type="button" id="btn-add-item" class="btn btn-outline-primary btn-sm mb-3">+ Adicionar item</button>
 
           <div id="resumo-venda" class="alert alert-info py-2 small d-none" role="status"></div>
           <div class="d-flex gap-2">
@@ -59,70 +64,104 @@
     </div>
   </div>
 </div>
+
+{# Modelo de linha em branco, clonado pelo botão "Adicionar item" #}
+<template id="linha-modelo">{% include 'gestao/_item_linha.html' with form=formset.empty_form %}</template>
 {{ produtos_info|json_script:"produtos-info" }}
 {% endblock %}
 
 {% block scripts %}
-<!-- Importa os scripts do Flatpickr e a tradução para português -->
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/pt.js"></script>
 
 <script>
 (function () {
-  // Inicializa o Flatpickr forçando o padrão brasileiro visualmente
+  // ---------- Data e hora (Flatpickr) ----------
   var campoData = document.getElementById("id_data_venda");
   flatpickr(campoData, {
     enableTime: true,
     time_24hr: true,
-    dateFormat: "Y-m-d H:i",      // Formato técnico enviado para o Django por trás dos panos
-    altInput: true,              // Cria a caixinha visual amigável
-    altFormat: "d/m/Y H:i",      // O que você VÊ e DIGITA: Dia / Mês / Ano e Horário
-    locale: "pt",                // Traduz os meses e dias para o português
-    maxDate: new Date(),         // Trava datas futuras (considera a hora atual)
-    allowInvalidPreload: true,   // Nunca apaga a data já gravada ao abrir a edição
+    dateFormat: "Y-m-d H:i",
+    altInput: true,
+    altFormat: "d/m/Y H:i",
+    locale: "pt",
+    maxDate: new Date(),
+    allowInvalidPreload: true,
     defaultDate: campoData.value || null
   });
 
+  // ---------- Itens ----------
   var info = JSON.parse(document.getElementById('produtos-info').textContent);
-  var selProduto = document.getElementById('id_produto');
-  var inpQtd = document.getElementById('id_quantidade');
-  var inpPreco = document.getElementById('id_preco_venda_praticado');
+  var cont = document.getElementById('itens-container');
+  var totalForms = document.getElementById('id_itens-TOTAL_FORMS');
+  var modelo = document.getElementById('linha-modelo');
   var resumo = document.getElementById('resumo-venda');
 
-  function brl(v) {
-    return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  }
-  function produtoAtual() { return info[selProduto.value] || null; }
+  function brl(v) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+  function campo(linha, sufixo) { return linha.querySelector('[name$="-' + sufixo + '"]'); }
 
-  function atualizarResumo() {
-    var p = produtoAtual();
-    var q = parseInt(inpQtd.value, 10);
-    var v = parseFloat(inpPreco.value);
-    if (!p || isNaN(q) || isNaN(v)) { resumo.classList.add('d-none'); return; }
-    var total = q * v;
-    var lucro = (v - parseFloat(p.custo)) * q;
-    resumo.textContent = 'Total: ' + brl(total) + '  ·  Lucro estimado: ' + brl(lucro) +
-                         '  ·  Estoque disponível: ' + p.estoque;
+  function custoDa(linha) {
+    if (linha.dataset.custo) { return parseFloat(linha.dataset.custo); }
+    var sel = campo(linha, 'produto');
+    var p = sel && info[sel.value];
+    return p ? parseFloat(p.custo) : null;
+  }
+
+  function atualizar() {
+    var total = 0, lucro = 0, n = 0;
+    cont.querySelectorAll('.item-linha').forEach(function (linha) {
+      var q = parseInt(campo(linha, 'quantidade').value, 10);
+      var v = parseFloat(campo(linha, 'preco_venda_praticado').value);
+      var c = custoDa(linha);
+      var rotulo = linha.querySelector('.linha-total');
+      if (isNaN(q) || isNaN(v)) { rotulo.textContent = ''; return; }
+      rotulo.textContent = brl(q * v);
+      total += q * v; n += 1;
+      if (c !== null) { lucro += (v - c) * q; }
+    });
+    if (n === 0) { resumo.classList.add('d-none'); return; }
+    resumo.textContent = n + ' item(ns)  ·  Total: ' + brl(total) + '  ·  Lucro estimado: ' + brl(lucro);
     resumo.classList.remove('d-none');
   }
 
-  selProduto.addEventListener('change', function () {
-    var p = produtoAtual();
-    if (p) {
-      inpPreco.value = p.preco_venda;
-      inpQtd.max = p.estoque;
+  function ligar(linha) {
+    var sel = campo(linha, 'produto');
+    var qtd = campo(linha, 'quantidade');
+    var preco = campo(linha, 'preco_venda_praticado');
+    if (linha.dataset.max) { qtd.max = linha.dataset.max; }
+    if (sel) {
+      var p0 = info[sel.value];
+      if (p0) { qtd.max = p0.estoque; }
+      sel.addEventListener('change', function () {
+        var p = info[sel.value];
+        if (p) {
+          preco.value = p.preco_venda;
+          qtd.max = p.estoque;
+          if (!qtd.value) { qtd.value = 1; }
+        }
+        atualizar();
+      });
     }
-    atualizarResumo();
-  });
-  inpQtd.addEventListener('input', atualizarResumo);
-  inpPreco.addEventListener('input', atualizarResumo);
-
-  var p0 = produtoAtual();
-  if (p0) {
-    if (!inpPreco.value) { inpPreco.value = p0.preco_venda; }
-    inpQtd.max = p0.estoque;
+    qtd.addEventListener('input', atualizar);
+    preco.addEventListener('input', atualizar);
+    var rem = linha.querySelector('.btn-remover-linha');
+    if (rem) { rem.addEventListener('click', function () { linha.remove(); atualizar(); }); }
   }
-  atualizarResumo();
+
+  function adicionarLinha() {
+    var idx = parseInt(totalForms.value, 10);
+    var caixa = document.createElement('div');
+    caixa.innerHTML = modelo.innerHTML.replace(/__prefix__/g, idx);
+    var linha = caixa.firstElementChild;
+    cont.appendChild(linha);
+    totalForms.value = idx + 1;  // nunca diminui: linhas removidas viram "vazias" no servidor
+    ligar(linha);
+    atualizar();
+  }
+
+  document.getElementById('btn-add-item').addEventListener('click', adicionarLinha);
+  cont.querySelectorAll('.item-linha').forEach(ligar);
+  atualizar();
 })();
 </script>
 {% endblock %}

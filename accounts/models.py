@@ -22,6 +22,11 @@ class UserProfile(models.Model):
         default=Status.PENDING,
         db_index=True,
     )
+    must_change_password = models.BooleanField(
+        "exigir troca de senha",
+        default=False,
+        help_text="Quando marcado, o usuário só consegue usar o sistema depois de trocar a senha.",
+    )
     avaliado_em = models.DateTimeField("avaliado em", null=True, blank=True)
     avaliado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,

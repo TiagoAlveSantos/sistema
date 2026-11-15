@@ -1,6 +1,11 @@
 from django import forms
 from django.contrib.auth import get_user_model
-from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
+from django.contrib.auth.forms import (
+    AuthenticationForm,
+    PasswordChangeForm,
+    SetPasswordForm,
+    UserCreationForm,
+)
 
 from .models import UserProfile
 from .permissions import is_user_approved
@@ -73,3 +78,23 @@ class LoginForm(BootstrapFormMixin, AuthenticationForm):
                         self.error_messages[codigo], code=codigo
                     ) from None
             raise erro
+
+
+
+class TrocaSenhaForm(BootstrapFormMixin, PasswordChangeForm):
+    """Troca de senha (pede a atual e valida a nova com as regras do Django)."""
+
+    def clean_new_password1(self):
+        nova = self.cleaned_data.get("new_password1")
+        if nova and self.user.check_password(nova):
+            raise forms.ValidationError("A nova senha deve ser diferente da atual.")
+        return nova
+
+
+class SenhaTemporariaForm(BootstrapFormMixin, SetPasswordForm):
+    """O administrador digita uma senha temporária (validada pelas regras do Django)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["new_password1"].label = "Senha temporária"
+        self.fields["new_password2"].label = "Repita a senha temporária"

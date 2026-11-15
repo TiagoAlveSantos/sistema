@@ -1,6 +1,10 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 
@@ -117,8 +121,9 @@ class Produto(models.Model):
 
 class Venda(models.Model):
     """
-    Venda registrada. Guarda o custo unitário NO MOMENTO da venda, para que o
-    lucro histórico não mude se o preço de compra do item for alterado depois.
+    Venda (cabeçalho): cliente, data e totais. Os produtos vendidos ficam nos
+    `ItemVenda` (uma venda pode ter vários itens). `total` e `lucro` são a soma
+    dos itens e ficam guardados aqui para o dashboard somar rapidamente.
     """
 
     usuario = _fk_usuario("vendas")
@@ -127,21 +132,6 @@ class Venda(models.Model):
         on_delete=models.PROTECT,
         related_name="vendas",
         verbose_name="Cliente",
-    )
-    produto = models.ForeignKey(
-        Produto,
-        on_delete=models.PROTECT,
-        related_name="vendas",
-        verbose_name="Item",
-    )
-    quantidade = models.PositiveIntegerField(
-        "Quantidade", validators=[MinValueValidator(1)]
-    )
-    preco_venda_praticado = models.DecimalField(
-        "Preço de venda praticado", max_digits=12, decimal_places=2
-    )
-    preco_compra_unitario = models.DecimalField(
-        "Custo unitário na data da venda", max_digits=12, decimal_places=2
     )
     total = models.DecimalField("Total da venda", max_digits=14, decimal_places=2)
     lucro = models.DecimalField("Lucro líquido", max_digits=14, decimal_places=2)
@@ -157,7 +147,61 @@ class Venda(models.Model):
         verbose_name_plural = "vendas"
 
     def __str__(self):
-        return f"Venda #{self.pk} - {self.produto}"
+        return f"Venda #{self.pk}"
+
+    def recalcular_totais(self):
+        """total e lucro da venda = soma dos itens."""
+        zero = Value(Decimal("0.00"))
+        saida = models.DecimalField(max_digits=14, decimal_places=2)
+        soma = self.itens.aggregate(
+            total=Coalesce(Sum("total"), zero, output_field=saida),
+            lucro=Coalesce(Sum("lucro"), zero, output_field=saida),
+        )
+        self.total = soma["total"]
+        self.lucro = soma["lucro"]
+        self.save(update_fields=["total", "lucro"])
+
+
+class ItemVendaQuerySet(models.QuerySet):
+    def do_usuario(self, usuario):
+        # O item não tem dono próprio: pertence ao dono da venda.
+        return self.filter(venda__usuario=usuario)
+
+
+class ItemVenda(models.Model):
+    """
+    Item de uma venda. Guarda o custo unitário NO MOMENTO da venda, para que o
+    lucro histórico não mude se o preço de compra do item for alterado depois.
+    """
+
+    venda = models.ForeignKey(Venda, on_delete=models.CASCADE, related_name="itens")
+    produto = models.ForeignKey(
+        Produto,
+        on_delete=models.PROTECT,
+        related_name="itens_venda",
+        verbose_name="Item",
+    )
+    quantidade = models.PositiveIntegerField(
+        "Quantidade", validators=[MinValueValidator(1)]
+    )
+    preco_venda_praticado = models.DecimalField(
+        "Preço de venda praticado", max_digits=12, decimal_places=2
+    )
+    preco_compra_unitario = models.DecimalField(
+        "Custo unitário na data da venda", max_digits=12, decimal_places=2
+    )
+    total = models.DecimalField("Total do item", max_digits=14, decimal_places=2)
+    lucro = models.DecimalField("Lucro líquido do item", max_digits=14, decimal_places=2)
+
+    objects = ItemVendaQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["id"]
+        verbose_name = "item da venda"
+        verbose_name_plural = "itens da venda"
+
+    def __str__(self):
+        return f"{self.quantidade}x {self.produto}"
 
     def calcular_valores(self):
         """lucro = (preço de venda praticado - preço de compra) * quantidade"""

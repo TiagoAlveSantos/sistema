@@ -3,7 +3,7 @@
 
 {% block content %}
 <h1 class="h3 mb-1">Gerenciar usuários</h1>
-<p class="text-muted">Aprove ou reprove cadastros. Por segurança, o administrador não tem acesso aos
+<p class="text-muted">Aprove ou reprove cadastros defina uma senha temporária ou exija a troca de senha de um usuário. Por segurança, o administrador não tem acesso aos
   clientes, prospecções, estoque ou vendas dos usuários.</p>
 
 <ul class="nav nav-pills mb-3">
@@ -36,8 +36,26 @@
             {% if u.profile.status == 'approved' %}<span class="badge text-bg-success">Aprovado</span>
             {% elif u.profile.status == 'rejected' %}<span class="badge text-bg-danger">Reprovado</span>
             {% else %}<span class="badge text-bg-warning">Pendente</span>{% endif %}
+            {% if u.profile.must_change_password %}<span class="badge text-bg-info">Troca de senha pendente</span>{% endif %}
           </td>
           <td class="text-end text-nowrap">
+            <a href="{% url 'accounts:senha_temporaria' u.pk %}" class="btn btn-outline-warning btn-sm">Definir senha temporária</a>
+            {% if u.profile.status == 'approved' %}
+              {% if u.profile.must_change_password %}
+                <form method="post" action="{% url 'accounts:cancelar_troca_senha' u.pk %}" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="status_atual" value="{{ status_atual }}">
+                  <button type="submit" class="btn btn-outline-secondary btn-sm">Cancelar troca de senha</button>
+                </form>
+              {% else %}
+                <form method="post" action="{% url 'accounts:exigir_troca_senha' u.pk %}" class="d-inline"
+                      onsubmit="return confirm('Exigir que este usuário troque a senha no próximo acesso?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="status_atual" value="{{ status_atual }}">
+                  <button type="submit" class="btn btn-outline-primary btn-sm">Exigir troca de senha</button>
+                </form>
+              {% endif %}
+            {% endif %}
             {% if u.profile.status != 'approved' %}
               <form method="post" action="{% url 'accounts:aprovar' u.pk %}" class="d-inline">
                 {% csrf_token %}

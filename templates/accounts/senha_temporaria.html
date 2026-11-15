@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block title %}Senha temporária · Sistema Mãe{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-7 col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h1 class="h4 mb-1">Definir senha temporária</h1>
+        <p class="text-muted">Usuário: <strong>{{ usuario_alvo.get_username }}</strong>
+          {% if usuario_alvo.first_name %}({{ usuario_alvo.first_name }}){% endif %}</p>
+        <div class="alert alert-info small">
+          Passe esta senha ao usuário por um canal seguro. No próximo acesso ele será obrigado a
+          trocá-la por uma senha só dele. Se ele estiver logado agora, a sessão será encerrada.
+        </div>
+        <form method="post" autocomplete="off">
+          {% csrf_token %}
+          {% include 'partials/campos.html' %}
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">Salvar senha temporária</button>
+            <a href="{% url 'accounts:painel' %}" class="btn btn-outline-secondary">Cancelar</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

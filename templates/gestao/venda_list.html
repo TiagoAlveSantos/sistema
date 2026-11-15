@@ -27,14 +27,13 @@
 
 <div class="card shadow-sm">
   <div class="table-responsive">
-    <table class="table table-striped table-hover align-middle mb-0">
+    <table class="table table-hover align-middle mb-0">
       <thead class="table-light">
         <tr>
+          <th style="width:2.5rem"></th>
           <th>Data</th>
           <th>Cliente</th>
-          <th>Item</th>
-          <th class="text-end">Qtd.</th>
-          <th class="text-end">Preço recomendado</th>
+          <th class="text-end">Itens</th>
           <th class="text-end">Total</th>
           <th class="text-end">Lucro</th>
           <th class="text-center">Ações</th>
@@ -42,31 +41,83 @@
       </thead>
       <tbody>
       {% for v in object_list %}
+        {% with itens=v.itens.all %}
         <tr>
+          <td>
+            <button class="btn btn-sm btn-link text-decoration-none p-0 btn-detalhes" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#itens-{{ v.pk }}"
+                    aria-expanded="false" aria-controls="itens-{{ v.pk }}" title="Ver itens da venda">
+              <span class="seta">&#9656;</span>
+            </button>
+          </td>
           <td>{{ v.data_venda|date:"d/m/Y H:i" }}</td>
           <td>{{ v.cliente.nome }}</td>
-          <td>{{ v.produto.nome }}</td>
-          <td class="text-end">{{ v.quantidade }}</td>
-          <td class="text-end">R$ {{ v.produto.preco_venda|floatformat:"2g" }}</td>
+          <td class="text-end">{{ itens|length }}</td>
           <td class="text-end">R$ {{ v.total|floatformat:"2g" }}</td>
           <td class="text-end {% if v.lucro < 0 %}text-danger{% else %}text-success{% endif %}">R$ {{ v.lucro|floatformat:"2g" }}</td>
-          <td class="text-center">
+          <td class="text-center text-nowrap">
             <div class="btn-group btn-group-sm" role="group">
-              <a href="{% url 'gestao:venda_update' v.pk %}" class="btn btn-outline-primary" title="Editar">
-                <i class="bi bi-pencil"></i> Editar
-              </a>
-              <a href="{% url 'gestao:venda_delete' v.pk %}" class="btn btn-outline-danger" title="Reverter / Estornar">
-                <i class="bi bi-arrow-counterclockwise"></i> Reverter
-              </a>
+              <a href="{% url 'gestao:venda_update' v.pk %}" class="btn btn-outline-primary" title="Editar">Editar</a>
+              <a href="{% url 'gestao:venda_delete' v.pk %}" class="btn btn-outline-danger" title="Reverter a venda inteira">Reverter venda</a>
             </div>
           </td>
         </tr>
+        <tr>
+          <td colspan="7" class="p-0 border-0">
+            <div class="collapse" id="itens-{{ v.pk }}">
+              <div class="bg-body-tertiary px-3 py-2">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr class="text-muted small">
+                      <th>Item</th>
+                      <th class="text-end">Qtd.</th>
+                      <th class="text-end">Preço sugerido</th>
+                      <th class="text-end">Preço praticado</th>
+                      <th class="text-end">Total</th>
+                      <th class="text-end">Lucro</th>
+                      <th class="text-end"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                  {% for i in itens %}
+                    <tr>
+                      <td>{{ i.produto.nome }}</td>
+                      <td class="text-end">{{ i.quantidade }}</td>
+                      <td class="text-end">R$ {{ i.produto.preco_venda|floatformat:"2g" }}</td>
+                      <td class="text-end">R$ {{ i.preco_venda_praticado|floatformat:"2g" }}</td>
+                      <td class="text-end">R$ {{ i.total|floatformat:"2g" }}</td>
+                      <td class="text-end {% if i.lucro < 0 %}text-danger{% else %}text-success{% endif %}">R$ {{ i.lucro|floatformat:"2g" }}</td>
+                      <td class="text-end text-nowrap">
+                        {% if itens|length > 1 %}
+                          <a href="{% url 'gestao:item_venda_delete' i.pk %}" class="btn btn-outline-danger btn-sm">Reverter item</a>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endwith %}
       {% empty %}
-        <tr><td colspan="8" class="text-center text-muted py-4">Nenhuma venda registrada ainda.</td></tr>
+        <tr><td colspan="7" class="text-center text-muted py-4">Nenhuma venda registrada ainda.</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
 {% include 'partials/paginacao.html' %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Gira a setinha quando o detalhe da venda abre/fecha
+document.querySelectorAll('.collapse[id^="itens-"]').forEach(function (el) {
+  var seta = document.querySelector('[data-bs-target="#' + el.id + '"] .seta');
+  el.addEventListener('show.bs.collapse', function () { seta.innerHTML = '&#9662;'; });
+  el.addEventListener('hide.bs.collapse', function () { seta.innerHTML = '&#9656;'; });
+});
+</script>
 {% endblock %}

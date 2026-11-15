@@ -23,4 +23,8 @@ urlpatterns = [
     path("painel/", views.painel_usuarios, name="painel"),
     path("painel/<int:pk>/aprovar/", views.aprovar_usuario, name="aprovar"),
     path("painel/<int:pk>/reprovar/", views.reprovar_usuario, name="reprovar"),
+    path("painel/<int:pk>/exigir-troca-senha/", views.exigir_troca_senha, name="exigir_troca_senha"),
+    path("painel/<int:pk>/cancelar-troca-senha/", views.cancelar_troca_senha, name="cancelar_troca_senha"),
+    path("painel/<int:pk>/senha-temporaria/", views.definir_senha_temporaria, name="senha_temporaria"),
+    path("senha/", views.TrocarSenhaView.as_view(), name="trocar_senha"),
 ]
