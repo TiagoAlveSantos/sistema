@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% block title %}Bloqueios de login · Sistema Mãe{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+  <h1 class="h3 mb-0">Bloqueios de login</h1>
+  {% if linhas %}
+    <form method="post" action="{% url 'accounts:desbloquear_todos' %}"
+          onsubmit="return confirm('Remover TODOS os registros de tentativas de login?');">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline-danger btn-sm">Desbloquear todos</button>
+    </form>
+  {% endif %}
+</div>
+<p class="text-muted">
+  Depois de {{ limite }} senhas erradas seguidas, o usuário fica bloqueado por um tempo (30 minutos).
+  Aqui você pode liberar antes disso. {% if total_bloqueados %}<strong>{{ total_bloqueados }} bloqueado(s) agora.</strong>{% endif %}
+</p>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Usuário</th><th>IP</th><th class="text-end">Falhas</th><th>Última tentativa</th>
+          <th>Situação</th><th class="text-end">Ação</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for l in linhas %}
+        <tr>
+          <td>{{ l.username }}</td>
+          <td class="text-nowrap">{{ l.ip }}</td>
+          <td class="text-end">{{ l.falhas }}</td>
+          <td>{{ l.ultima|date:"d/m/Y H:i" }}</td>
+          <td>
+            {% if l.bloqueado %}
+              <span class="badge text-bg-danger">Bloqueado</span>
+              {% if l.libera_em %}<span class="small text-muted">até {{ l.libera_em|date:"H:i" }}</span>{% endif %}
+            {% elif l.expirado %}
+              <span class="badge text-bg-secondary">Expirado</span>
+            {% else %}
+              <span class="badge text-bg-warning">Em contagem</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <form method="post" action="{% url 'accounts:desbloquear' l.pk %}" class="d-inline">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-outline-primary btn-sm">Desbloquear</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="text-center text-muted py-4">Nenhuma tentativa de login falha registrada. Ninguém está bloqueado.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

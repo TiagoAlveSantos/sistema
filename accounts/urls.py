@@ -1,7 +1,7 @@
 from django.contrib.auth import views as auth_views
 from django.urls import path
 
-from . import views
+from . import views, views_bloqueios
 from .forms import LoginForm
 
 app_name = "accounts"
@@ -27,4 +27,7 @@ urlpatterns = [
     path("painel/<int:pk>/cancelar-troca-senha/", views.cancelar_troca_senha, name="cancelar_troca_senha"),
     path("painel/<int:pk>/senha-temporaria/", views.definir_senha_temporaria, name="senha_temporaria"),
     path("senha/", views.TrocarSenhaView.as_view(), name="trocar_senha"),
+    path("bloqueios/", views_bloqueios.bloqueios, name="bloqueios"),
+    path("bloqueios/<int:pk>/desbloquear/", views_bloqueios.desbloquear, name="desbloquear"),
+    path("bloqueios/desbloquear-todos/", views_bloqueios.desbloquear_todos, name="desbloquear_todos"),
 ]

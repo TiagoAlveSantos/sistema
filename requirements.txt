@@ -1,19 +1,24 @@
-# Sistema Mãe - dependências para Nuvem (Render + Neon)
-Django>=5.2,<5.3
+# Sistema Mãe - dependências com versões FIXAS (as mesmas testadas localmente).
+# Para atualizar: instale as novas versões, rode `python manage.py test` e
+# regenere com `pip freeze`. Não atualize no Render sem testar antes.
 
-# Driver do PostgreSQL para conectar no Neon
-psycopg2-binary>=2.9.0
+# Framework web
+Django==5.2.19
 
-# Ferramenta para ler a URL de conexão do banco de dados (DATABASE_URL)
-dj-database-url>=2.0.0
+# Driver do PostgreSQL (Neon) e leitura da DATABASE_URL
+psycopg2-binary==2.9.13
+dj-database-url==3.1.2
 
-# Servidor web de alta performance para produção no Render
-gunicorn>=21.2.0
+# Servidor de produção (Render) e arquivos estáticos
+gunicorn==27.0.1
+whitenoise==6.12.0
 
-# Gerenciador de arquivos estáticos (CSS/JS) no Render
-whitenoise>=6.5.0
+# Bloqueio de tentativas de login (e a detecção de IP que ele usa)
+django-axes==9.0.0
+django-ipware==8.0.0
+python-ipware==4.1.1
 
-# Banco de fusos horários
-tzdata
-
-django-axes[ipware]
+# Dependências do Django e fusos horários
+asgiref==3.13.0
+sqlparse==0.6.1
+tzdata==2026.6

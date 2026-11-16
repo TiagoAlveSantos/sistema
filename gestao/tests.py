@@ -5,7 +5,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.testutils import SENHA, User, criar_admin, criar_usuario, sem_axes
+from accounts.testutils import SENHA, criar_admin, criar_usuario, sem_axes
 
 from .models import Cliente, ItemVenda, Produto, Prospeccao, Venda
 from .services import registrar_venda
@@ -751,3 +751,132 @@ class DashboardTests(TestCase):
         resp = self.client.get(self.url)
         self.assertContains(resp, ">2024</option>")
         self.assertNotContains(resp, "2.024")
+
+
+# ==========================================================================
+# Limites numéricos e edição segura do estoque
+# ==========================================================================
+@sem_axes
+class LimitesTests(TestCase):
+    def setUp(self):
+        self.user = criar_usuario("ana")
+        self.cliente = Cliente.objects.create(usuario=self.user, nome="Loja X")
+        self.client.login(username="ana", password=SENHA)
+
+    def _produto(self, nome="Item", qtd=10, custo="2.00", venda="5.00"):
+        return Produto.objects.create(
+            usuario=self.user, nome=nome, quantidade=qtd,
+            preco_compra=Decimal(custo), preco_venda=Decimal(venda),
+        )
+
+    def test_estoque_recusa_quantidade_e_precos_acima_do_limite(self):
+        url = reverse("gestao:produto_create")
+        resp = self.client.post(
+            url,
+            {"nome": "Caro", "quantidade": 1_000_001, "preco_compra": "1.00", "preco_venda": "1.00"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        resp = self.client.post(
+            url,
+            {"nome": "Caro", "quantidade": 1, "preco_compra": "1000000.00", "preco_venda": "1.00"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        resp = self.client.post(
+            url,
+            {"nome": "Caro", "quantidade": 1, "preco_compra": "1.00", "preco_venda": "1000000.00"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Produto.objects.count(), 0)
+
+    def test_estoque_aceita_exatamente_o_limite(self):
+        resp = self.client.post(
+            reverse("gestao:produto_create"),
+            {"nome": "Limite", "quantidade": 1_000_000, "preco_compra": "999999.99", "preco_venda": "999999.99"},
+        )
+        self.assertRedirects(resp, reverse("gestao:produto_list"))
+        self.assertEqual(Produto.objects.get().quantidade, 1_000_000)
+
+    def test_venda_recusa_quantidade_e_preco_acima_do_limite(self):
+        p = self._produto(qtd=1_000_000)
+        url = reverse("gestao:venda_create")
+        resp = self.client.post(
+            url, dados_venda(self.cliente, [{"produto": p, "quantidade": 1_000_001, "preco": "1.00"}])
+        )
+        self.assertEqual(resp.status_code, 200)
+        resp = self.client.post(
+            url, dados_venda(self.cliente, [{"produto": p, "quantidade": 1, "preco": "1000000.00"}])
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Venda.objects.count(), 0)
+
+    def test_um_item_no_limite_maximo_e_aceito(self):
+        p = self._produto(qtd=1_000_000, custo="0.00", venda="999999.99")
+        resp = self.client.post(
+            reverse("gestao:venda_create"),
+            dados_venda(self.cliente, [{"produto": p, "quantidade": 1_000_000, "preco": "999999.99"}]),
+        )
+        self.assertRedirects(resp, reverse("gestao:venda_list"))
+        self.assertEqual(Venda.objects.get().total, Decimal("999999990000.00"))
+
+    def test_soma_dos_itens_acima_do_limite_desfaz_a_venda(self):
+        a = self._produto("A", qtd=1_000_000, custo="0.00", venda="999999.99")
+        b = self._produto("B", qtd=1_000_000, custo="0.00", venda="999999.99")
+        resp = self.client.post(
+            reverse("gestao:venda_create"),
+            dados_venda(
+                self.cliente,
+                [
+                    {"produto": a, "quantidade": 1_000_000, "preco": "999999.99"},
+                    {"produto": b, "quantidade": 1_000_000, "preco": "999999.99"},
+                ],
+            ),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "grande demais")
+        self.assertEqual(Venda.objects.count(), 0)
+        self.assertEqual(ItemVenda.objects.count(), 0)
+        a.refresh_from_db()
+        self.assertEqual(a.quantidade, 1_000_000)  # estoque não foi debitado
+
+    def test_edicao_de_estoque_exibe_a_quantidade_original_oculta(self):
+        p = self._produto()
+        resp = self.client.get(reverse("gestao:produto_update", args=[p.pk]))
+        self.assertContains(resp, 'name="quantidade_original"')
+        self.assertContains(resp, 'value="10"')
+
+    def test_edicao_barra_o_salvamento_se_o_estoque_mudou_no_meio(self):
+        p = self._produto(qtd=10)
+        url = reverse("gestao:produto_update", args=[p.pk])
+        # Tela aberta com estoque 10; antes de salvar, uma venda tira 1 unidade.
+        registrar_venda(usuario=self.user, cliente=self.cliente, itens=[item(p, 1, "5.00")])
+        dados = {
+            "nome": "Item", "quantidade": 10, "quantidade_original": 10,
+            "preco_compra": "2.00", "preco_venda": "5.00",
+        }
+        resp = self.client.post(url, dados)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "mudou enquanto você editava")
+        p.refresh_from_db()
+        self.assertEqual(p.quantidade, 9)  # a venda NÃO foi sobrescrita
+
+        # Reenviando com o estoque atualizado (9) o salvamento passa.
+        dados.update({"quantidade": 20, "quantidade_original": 9})
+        resp = self.client.post(url, dados)
+        self.assertRedirects(resp, reverse("gestao:produto_list"))
+        p.refresh_from_db()
+        self.assertEqual(p.quantidade, 20)
+
+    def test_edicao_sem_mudanca_no_meio_salva_normalmente(self):
+        p = self._produto(qtd=10)
+        resp = self.client.post(
+            reverse("gestao:produto_update", args=[p.pk]),
+            {"nome": "Novo nome", "quantidade": 7, "quantidade_original": 10,
+             "preco_compra": "2.00", "preco_venda": "5.00"},
+        )
+        self.assertRedirects(resp, reverse("gestao:produto_list"))
+        p.refresh_from_db()
+        self.assertEqual((p.nome, p.quantidade), ("Novo nome", 7))
+
+    def test_novo_item_nao_tem_o_campo_de_quantidade_original(self):
+        resp = self.client.get(reverse("gestao:produto_create"))
+        self.assertNotContains(resp, "quantidade_original")

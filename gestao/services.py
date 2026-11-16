@@ -3,6 +3,7 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
+from .limites import TOTAL_MAX
 from .models import ItemVenda, Produto, Venda
 
 
@@ -64,6 +65,18 @@ def _criar_item(usuario, venda, produto, quantidade, preco):
     )
 
 
+def _fechar_venda(venda):
+    """Recalcula total e lucro; recusa valores que não cabem no banco."""
+    total, lucro = venda.calcular_totais()
+    if abs(total) > TOTAL_MAX or abs(lucro) > TOTAL_MAX:
+        raise VendaInvalida(
+            "O valor total desta venda é grande demais "
+            "(limite de R$ 999.999.999.999,99). Divida em mais de uma venda."
+        )
+    venda.total, venda.lucro = total, lucro
+    venda.save(update_fields=["total", "lucro"])
+
+
 # --------------------------------------------------------------------------
 # Registrar
 # --------------------------------------------------------------------------
@@ -101,7 +114,7 @@ def registrar_venda(*, usuario, cliente, itens, data_venda=None):
     # Ordem fixa por produto evita impasses (deadlock) entre vendas simultâneas.
     for it in sorted(itens, key=lambda i: i["produto"].pk):
         _criar_item(usuario, venda, it["produto"], it["quantidade"], it["preco"])
-    venda.recalcular_totais()
+    _fechar_venda(venda)
     return venda
 
 
@@ -221,5 +234,5 @@ def atualizar_venda(*, usuario, venda_id, cliente, data_venda, itens):
 
     venda.cliente = cliente
     venda.save()
-    venda.recalcular_totais()
+    _fechar_venda(venda)
     return venda

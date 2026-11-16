@@ -1,6 +1,11 @@
-from django.test import Client, TestCase
+import io
+import json
+from unittest import mock
+
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
+from . import captcha
 from .models import UserProfile
 from .testutils import SENHA, User, criar_admin, criar_usuario, sem_axes
 
@@ -356,3 +361,79 @@ class SenhaTemporariaTests(TestCase):
     def test_painel_mostra_o_botao(self):
         resp = self.adm.get(reverse("accounts:painel") + "?status=approved")
         self.assertContains(resp, "Definir senha temporária")
+
+
+# ==========================================================================
+# Captcha do cadastro (Cloudflare Turnstile)
+# ==========================================================================
+DADOS_REGISTRO = {
+    "username": "maria",
+    "first_name": "Maria",
+    "email": "maria@exemplo.com",
+    "password1": SENHA,
+    "password2": SENHA,
+}
+CHAVES = dict(TURNSTILE_SITE_KEY="site-123", TURNSTILE_SECRET_KEY="segredo-456")
+
+
+@sem_axes
+class CaptchaTests(TestCase):
+    url = "/contas/registro/"
+
+    def test_sem_chaves_o_captcha_fica_desligado(self):
+        self.assertFalse(captcha.captcha_ativo())
+        resp = self.client.get(self.url)
+        self.assertNotContains(resp, "cf-turnstile")
+        self.client.post(self.url, DADOS_REGISTRO)
+        self.assertTrue(User.objects.filter(username="maria").exists())
+
+    @override_settings(**CHAVES)
+    def test_com_chaves_o_widget_aparece(self):
+        resp = self.client.get(self.url)
+        self.assertContains(resp, "cf-turnstile")
+        self.assertContains(resp, "site-123")
+        self.assertContains(resp, "challenges.cloudflare.com")
+
+    @override_settings(**CHAVES)
+    def test_sem_token_o_cadastro_e_recusado(self):
+        resp = self.client.post(self.url, DADOS_REGISTRO)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "não é um robô")
+        self.assertFalse(User.objects.filter(username="maria").exists())
+
+    @override_settings(**CHAVES)
+    def test_token_recusado_pelo_cloudflare_bloqueia(self):
+        with mock.patch("accounts.captcha.verificar", return_value=False):
+            resp = self.client.post(self.url, {**DADOS_REGISTRO, "cf-turnstile-response": "x"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(User.objects.filter(username="maria").exists())
+
+    @override_settings(**CHAVES)
+    def test_token_aprovado_permite_o_cadastro(self):
+        with mock.patch("accounts.captcha.verificar", return_value=True) as m:
+            resp = self.client.post(self.url, {**DADOS_REGISTRO, "cf-turnstile-response": "tok"})
+        self.assertRedirects(resp, reverse("accounts:registro_concluido"))
+        m.assert_called_once_with("tok")
+        self.assertTrue(User.objects.filter(username="maria").exists())
+
+    @override_settings(**CHAVES)
+    def test_formulario_invalido_nao_chama_o_cloudflare(self):
+        with mock.patch("accounts.captcha.verificar") as m:
+            self.client.post(self.url, {**DADOS_REGISTRO, "password2": "diferente"})
+        m.assert_not_called()
+
+    @override_settings(**CHAVES)
+    def test_verificar_trata_falha_de_rede_como_recusa(self):
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("sem rede")):
+            self.assertFalse(captcha.verificar("tok"))
+        self.assertFalse(captcha.verificar(""))
+
+    @override_settings(**CHAVES)
+    def test_verificar_aceita_resposta_de_sucesso(self):
+        falsa = mock.MagicMock()
+        falsa.__enter__.return_value = io.BytesIO(json.dumps({"success": True}).encode())
+        with mock.patch("urllib.request.urlopen", return_value=falsa):
+            self.assertTrue(captcha.verificar("tok"))
+        falsa.__enter__.return_value = io.BytesIO(json.dumps({"success": False}).encode())
+        with mock.patch("urllib.request.urlopen", return_value=falsa):
+            self.assertFalse(captcha.verificar("tok"))

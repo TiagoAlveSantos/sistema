@@ -1,5 +1,6 @@
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.views import PasswordChangeView
@@ -9,6 +10,7 @@ from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from . import captcha
 from .forms import RegistroForm, SenhaTemporariaForm, TrocaSenhaForm
 from .models import UserProfile
 from .permissions import superuser_required
@@ -23,11 +25,25 @@ def registro(request):
     if request.method == "POST":
         form = RegistroForm(request.POST)
         if form.is_valid():
-            form.save()
-            return redirect("accounts:registro_concluido")
+            if captcha.captcha_ativo() and not captcha.verificar(
+                request.POST.get("cf-turnstile-response")
+            ):
+                form.add_error(
+                    None, "Não foi possível confirmar que você não é um robô. Tente de novo."
+                )
+            else:
+                form.save()
+                return redirect("accounts:registro_concluido")
     else:
         form = RegistroForm()
-    return render(request, "accounts/registro.html", {"form": form})
+    return render(
+        request,
+        "accounts/registro.html",
+        {
+            "form": form,
+            "turnstile_site_key": settings.TURNSTILE_SITE_KEY if captcha.captcha_ativo() else "",
+        },
+    )
 
 
 def registro_concluido(request):

@@ -11,6 +11,9 @@
         <form method="post">
           {% csrf_token %}
           {% include 'partials/campos.html' %}
+          {% if turnstile_site_key %}
+            <div class="cf-turnstile mb-3" data-sitekey="{{ turnstile_site_key }}" data-language="pt-br"></div>
+          {% endif %}
           <button type="submit" class="btn btn-primary w-100">Solicitar cadastro</button>
         </form>
         <p class="text-center small mt-3 mb-0">
@@ -20,4 +23,8 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if turnstile_site_key %}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>{% endif %}
 {% endblock %}

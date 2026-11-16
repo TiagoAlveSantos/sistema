@@ -149,16 +149,19 @@ class Venda(models.Model):
     def __str__(self):
         return f"Venda #{self.pk}"
 
-    def recalcular_totais(self):
-        """total e lucro da venda = soma dos itens."""
+    def calcular_totais(self):
+        """(total, lucro) da venda = soma dos itens (sem gravar)."""
         zero = Value(Decimal("0.00"))
-        saida = models.DecimalField(max_digits=14, decimal_places=2)
+        saida = models.DecimalField(max_digits=16, decimal_places=2)
         soma = self.itens.aggregate(
             total=Coalesce(Sum("total"), zero, output_field=saida),
             lucro=Coalesce(Sum("lucro"), zero, output_field=saida),
         )
-        self.total = soma["total"]
-        self.lucro = soma["lucro"]
+        return soma["total"], soma["lucro"]
+
+    def recalcular_totais(self):
+        """Grava total e lucro = soma dos itens."""
+        self.total, self.lucro = self.calcular_totais()
         self.save(update_fields=["total", "lucro"])
 
 

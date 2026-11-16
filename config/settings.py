@@ -3,6 +3,7 @@ from pathlib import Path
 import dj_database_url
 
 from django.contrib.messages import constants as message_constants
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management.utils import get_random_secret_key
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -13,6 +14,13 @@ def _obter_secret_key():
     da_env = os.environ.get("DJANGO_SECRET_KEY")
     if da_env:
         return da_env
+    if "RENDER" in os.environ:
+        # No Render o disco é apagado a cada deploy: uma chave gerada em arquivo
+        # mudaria sempre e derrubaria todas as sessões. Exija a variável.
+        raise ImproperlyConfigured(
+            "Defina a variável de ambiente DJANGO_SECRET_KEY no Render "
+            "(Environment > Add Environment Variable)."
+        )
     arquivo = BASE_DIR / ".secret_key"
     if arquivo.exists():
         chave = arquivo.read_text(encoding="utf-8").strip()
@@ -159,6 +167,10 @@ if 'RENDER' in os.environ:
     # sem isso o Axes bloquearia o IP do proxy (todos os usuários juntos).
     AXES_IPWARE_PROXY_COUNT = 1
     AXES_IPWARE_META_PRECEDENCE_ORDER = ("HTTP_X_FORWARDED_FOR", "REMOTE_ADDR")
+    # HSTS: o navegador passa a usar SOMENTE https neste site pelo tempo abaixo.
+    # Começa em 1 hora (3600 s); depois que tudo estiver estável, suba o valor
+    # (ex.: DJANGO_HSTS_SECONDS=31536000 = 1 ano) pela variável de ambiente.
+    SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "3600"))
 
 # --------------------------------------------------------------------------
 # Internacionalização
@@ -185,3 +197,13 @@ AXES_RESET_ON_SUCCESS = True
 
 #Remove o log dele para tentar deixar mais rápido
 AXES_DISABLE_ACCESS_LOG = True
+
+# Bloqueia por usuário (e não por IP), para quem divide a mesma rede
+AXES_LOCKOUT_PARAMETERS = ["username"]
+
+# --------------------------------------------------------------------------
+# Captcha do cadastro (Cloudflare Turnstile, gratuito). Só é exigido se as duas
+# chaves estiverem definidas nas variáveis de ambiente; sem elas fica desligado.
+# --------------------------------------------------------------------------
+TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY", "")
+TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")

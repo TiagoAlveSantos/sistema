@@ -1,5 +1,4 @@
 import re
-from decimal import Decimal
 
 from django import forms
 
@@ -7,6 +6,9 @@ from django.utils import timezone
 
 from accounts.forms import BootstrapFormMixin
 
+from django.core.validators import MaxValueValidator
+
+from .limites import PRECO_MAX, QTD_MAX
 from .models import Cliente, Produto, Prospeccao, Venda
 
 
@@ -112,14 +114,52 @@ class ProspeccaoForm(UsuarioModelForm):
 
 
 class ProdutoForm(UsuarioModelForm):
+    # Guarda a quantidade vista ao abrir a tela: se uma venda alterar o estoque
+    # enquanto a tela está aberta, o salvamento é barrado (evita sobrescrever).
+    quantidade_original = forms.IntegerField(required=False, widget=forms.HiddenInput)
+
     class Meta:
         model = Produto
         fields = ["nome", "quantidade", "preco_compra", "preco_venda"]
         widgets = {
-            "quantidade": forms.NumberInput(attrs={"min": "0"}),
-            "preco_compra": forms.NumberInput(attrs={"min": "0"}),
-            "preco_venda": forms.NumberInput(attrs={"min": "0"}),
+            "quantidade": forms.NumberInput(attrs={"min": "0", "max": str(QTD_MAX)}),
+            "preco_compra": forms.NumberInput(attrs={"min": "0", "max": str(PRECO_MAX)}),
+            "preco_venda": forms.NumberInput(attrs={"min": "0", "max": str(PRECO_MAX)}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["quantidade"].validators.append(
+            MaxValueValidator(
+                QTD_MAX, message=f"A quantidade máxima por item é {QTD_MAX:,}.".replace(",", ".")
+            )
+        )
+        for nome in ("preco_compra", "preco_venda"):
+            self.fields[nome].validators.append(
+                MaxValueValidator(PRECO_MAX, message="O valor máximo por unidade é R$ 999.999,99.")
+            )
+        if self.instance.pk:
+            # self.instance foi lido do banco agora: é o estoque ATUAL.
+            self._quantidade_db = self.instance.quantidade
+            self.fields["quantidade_original"].initial = self._quantidade_db
+        else:
+            del self.fields["quantidade_original"]
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.instance.pk:
+            original = cleaned.get("quantidade_original")
+            if original is not None and original != self._quantidade_db:
+                # Atualiza o valor "visto" para o próximo envio e avisa o usuário.
+                dados = self.data.copy()
+                dados["quantidade_original"] = str(self._quantidade_db)
+                self.data = dados
+                self.add_error(
+                    "quantidade",
+                    f"O estoque deste item mudou enquanto você editava (agora são "
+                    f"{self._quantidade_db}). Confira a quantidade e salve de novo.",
+                )
+        return cleaned
 
 
 class VendaForm(UsuarioModelForm):
@@ -170,14 +210,18 @@ class ItemVendaForm(BootstrapFormMixin, forms.Form):
         label="Item",
     )
     quantidade = forms.IntegerField(
-        min_value=1, label="Qtd.", widget=forms.NumberInput(attrs={"min": "1"})
+        min_value=1,
+        max_value=QTD_MAX,
+        label="Qtd.",
+        widget=forms.NumberInput(attrs={"min": "1"}),
     )
     preco_venda_praticado = forms.DecimalField(
         min_value=0,
+        max_value=PRECO_MAX,
         max_digits=12,
         decimal_places=2,
         label="Preço (R$)",
-        widget=forms.NumberInput(attrs={"min": "0", "step": "0.01"}),
+        widget=forms.NumberInput(attrs={"min": "0", "max": str(PRECO_MAX), "step": "0.01"}),
     )
 
     def __init__(self, *args, usuario, **kwargs):
