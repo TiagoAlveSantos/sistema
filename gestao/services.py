@@ -1,10 +1,12 @@
+from decimal import Decimal
+
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
 from .limites import TOTAL_MAX
-from .models import ItemVenda, Produto, Venda
+from .models import ItemVenda, Pagamento, Produto, Venda
 
 
 class EstoqueInsuficiente(Exception):
@@ -77,15 +79,65 @@ def _fechar_venda(venda):
     venda.save(update_fields=["total", "lucro"])
 
 
+def brl(valor):
+    """1234.5 -> '1.234,50' (para mensagens)."""
+    texto = f"{valor:,.2f}"
+    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _gravar_pagamentos(venda, pagamentos):
+    """
+    Substitui os pagamentos da venda. `pagamentos` é uma lista de dicts
+    {"metodo", "valor", "data", "pago"}; a soma precisa fechar com o total da venda.
+    None = venda quitada de uma vez (1 pagamento 'Outro' já pago, na data da venda).
+    """
+    if pagamentos is None:
+        pagamentos = []
+        if venda.total > 0:
+            pagamentos = [
+                {
+                    "metodo": Pagamento.Metodo.OUTRO,
+                    "valor": venda.total,
+                    "data": timezone.localtime(venda.data_venda).date(),
+                    "pago": True,
+                }
+            ]
+
+    soma = sum((p["valor"] for p in pagamentos), Decimal("0.00"))
+    if soma != venda.total:
+        raise VendaInvalida(
+            f"Os pagamentos somam R$ {brl(soma)}, mas o total da venda é R$ {brl(venda.total)}. "
+            "Ajuste os valores para fechar a conta."
+        )
+    if any(p["valor"] <= 0 for p in pagamentos):
+        raise VendaInvalida("Cada pagamento deve ter valor maior que zero.")
+
+    venda.pagamentos.all().delete()
+    Pagamento.objects.bulk_create(
+        [
+            Pagamento(
+                venda=venda,
+                metodo=p["metodo"],
+                valor=p["valor"],
+                data=p["data"],
+                pago=bool(p["pago"]),
+            )
+            for p in pagamentos
+        ]
+    )
+
+
 # --------------------------------------------------------------------------
 # Registrar
 # --------------------------------------------------------------------------
 @transaction.atomic
-def registrar_venda(*, usuario, cliente, itens, data_venda=None):
+def registrar_venda(*, usuario, cliente, itens, pagamentos=None, data_venda=None):
     """
     Registra uma venda com vários itens, de forma atômica.
 
     `itens` é uma lista de dicts: {"produto": Produto, "quantidade": int, "preco": Decimal}.
+    `pagamentos`: lista de {"metodo", "valor", "data", "pago"} que deve somar o total
+    da venda (None = venda quitada de uma vez).
     Qualquer falha (estoque, dono, item repetido) desfaz tudo (rollback).
     """
     if cliente.usuario_id != usuario.pk:
@@ -115,6 +167,7 @@ def registrar_venda(*, usuario, cliente, itens, data_venda=None):
     for it in sorted(itens, key=lambda i: i["produto"].pk):
         _criar_item(usuario, venda, it["produto"], it["quantidade"], it["preco"])
     _fechar_venda(venda)
+    _gravar_pagamentos(venda, pagamentos)
     return venda
 
 
@@ -169,7 +222,7 @@ def estornar_item(*, usuario, item_id):
 # Editar
 # --------------------------------------------------------------------------
 @transaction.atomic
-def atualizar_venda(*, usuario, venda_id, cliente, data_venda, itens):
+def atualizar_venda(*, usuario, venda_id, cliente, data_venda, itens, pagamentos=None):
     """
     Edita uma venda mantendo o estoque consistente.
 
@@ -178,6 +231,8 @@ def atualizar_venda(*, usuario, venda_id, cliente, data_venda, itens):
     "item_id" = adiciona um item novo ({"produto", "quantidade", "preco"}).
     Itens não citados ficam como estão (para remover, use estornar_item).
     A data original é mantida se não foi alterada (comparando até o minuto).
+    `pagamentos`: lista que SUBSTITUI os pagamentos atuais e deve fechar com o novo
+    total. Com None, os pagamentos atuais ficam e também precisam fechar com o total.
     """
     try:
         venda = Venda.objects.select_for_update().get(pk=venda_id, usuario=usuario)
@@ -235,4 +290,12 @@ def atualizar_venda(*, usuario, venda_id, cliente, data_venda, itens):
     venda.cliente = cliente
     venda.save()
     _fechar_venda(venda)
+    if pagamentos is None:
+        atuais = [
+            {"metodo": p.metodo, "valor": p.valor, "data": p.data, "pago": p.pago}
+            for p in venda.pagamentos.all()
+        ]
+        _gravar_pagamentos(venda, atuais)  # só confere a soma (regrava iguais)
+    else:
+        _gravar_pagamentos(venda, pagamentos)
     return venda

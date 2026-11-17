@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.utils.formats import number_format
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import CreateView, DeleteView, ListView, UpdateView, View
 
 from accounts.permissions import UsuarioComumMixin
@@ -19,13 +20,15 @@ from .forms import (
     ClienteForm,
     ItemVendaFormSet,
     ItemVendaFormSetEdicao,
+    PagamentoFormSet,
     ProdutoForm,
     ProspeccaoForm,
     VendaForm,
     itens_da_formset,
+    pagamentos_da_formset,
 )
 from .mixins import DonoFormMixin, DonoQuerysetMixin
-from .models import Cliente, ItemVenda, Produto, Prospeccao, Venda
+from .models import Cliente, ItemVenda, Pagamento, Produto, Prospeccao, Venda
 from .services import (
     EstoqueInsuficiente,
     VendaInvalida,
@@ -127,6 +130,18 @@ def dashboard(request):
         clientes_compradores=Count("cliente", distinct=True),
     )
 
+    # Pagamentos: recebido (pagos, pela data do pagamento) e a receber (pendentes,
+    # pelo vencimento) dentro do período; "atrasado" olha tudo que venceu e não foi pago.
+    pagamentos = Pagamento.objects.do_usuario(usuario)
+    pagamentos_periodo = pagamentos
+    if ano is not None:
+        pagamentos_periodo = pagamentos.filter(data__gte=inicio, data__lt=fim)
+    recebido = pagamentos_periodo.filter(pago=True).aggregate(t=_soma("valor"))["t"]
+    a_receber = pagamentos_periodo.filter(pago=False).aggregate(t=_soma("valor"))["t"]
+    atrasado = pagamentos.filter(pago=False, data__lt=timezone.localdate()).aggregate(
+        t=_soma("valor")
+    )["t"]
+
     # Valor atual do estoque, ao custo de aquisição (não depende do período)
     valor_estoque = Produto.objects.do_usuario(usuario).aggregate(
         total=Coalesce(
@@ -157,6 +172,9 @@ def dashboard(request):
             "qtd_prospeccoes": prospeccoes.count(),
             "total_clientes": clientes.count(),
             "valor_estoque": valor_estoque,
+            "recebido": recebido,
+            "a_receber": a_receber,
+            "atrasado": atrasado,
         },
     )
 
@@ -342,6 +360,9 @@ class ProdutoDeleteView(DonoQuerysetMixin, DeleteView):
 # ==========================================================================
 # Vendas
 # ==========================================================================
+FILTROS_PAGAMENTO = ("pendente", "atrasado", "quitado", "ajustar")
+
+
 class VendaListView(DonoQuerysetMixin, ListView):
     model = Venda
     template_name = "gestao/venda_list.html"
@@ -353,8 +374,41 @@ class VendaListView(DonoQuerysetMixin, ListView):
             super()
             .get_queryset()
             .select_related("cliente")
-            .prefetch_related("itens__produto")
+            .prefetch_related("itens__produto", "pagamentos")
         )
+
+        # Filtro por situação do pagamento (?pagamento=...); valor inválido é ignorado
+        self.filtro_pagamento = self.request.GET.get("pagamento", "")
+        if self.filtro_pagamento in FILTROS_PAGAMENTO:
+            zero = Value(Decimal("0.00"))
+            dec = DecimalField(max_digits=14, decimal_places=2)
+            hoje = timezone.localdate()
+            queryset = queryset.annotate(
+                soma_paga=Coalesce(
+                    Sum("pagamentos__valor", filter=Q(pagamentos__pago=True)),
+                    zero, output_field=dec,
+                ),
+                soma_pendente=Coalesce(
+                    Sum("pagamentos__valor", filter=Q(pagamentos__pago=False)),
+                    zero, output_field=dec,
+                ),
+                soma_atrasada=Coalesce(
+                    Sum(
+                        "pagamentos__valor",
+                        filter=Q(pagamentos__pago=False, pagamentos__data__lt=hoje),
+                    ),
+                    zero, output_field=dec,
+                ),
+            )
+            fecha = Q(total=F("soma_paga") + F("soma_pendente"))
+            if self.filtro_pagamento == "pendente":
+                queryset = queryset.filter(fecha, soma_pendente__gt=0)
+            elif self.filtro_pagamento == "atrasado":
+                queryset = queryset.filter(fecha, soma_atrasada__gt=0)
+            elif self.filtro_pagamento == "quitado":
+                queryset = queryset.filter(fecha, soma_pendente=0)
+            else:  # ajustar
+                queryset = queryset.exclude(fecha)
 
         # Filtro por cliente (?cliente=X); valor inválido é ignorado
         cliente_id = self.request.GET.get("cliente", "")
@@ -367,6 +421,7 @@ class VendaListView(DonoQuerysetMixin, ListView):
         ctx = super().get_context_data(**kwargs)
         # Apenas os clientes do usuário logado no <select>
         ctx["clientes"] = Cliente.objects.do_usuario(self.request.user).order_by("nome")
+        ctx["filtro_pagamento"] = getattr(self, "filtro_pagamento", "")
         return ctx
 
 
@@ -392,13 +447,15 @@ class _VendaFormularioView(UsuarioComumMixin, View):
     def _forms(self, request, data=None):
         raise NotImplementedError
 
-    def _render(self, request, form, formset):
+    def _render(self, request, form, formset, pformset):
         return render(
             request,
             self.template_name,
             {
                 "form": form,
                 "formset": formset,
+                "pformset": pformset,
+                "metodos": Pagamento.Metodo.choices,
                 "object": self.venda,
                 "produtos_info": _produtos_info(request.user),
                 "tem_produtos": bool(Produto.objects.do_usuario(request.user).filter(quantidade__gt=0).exists()
@@ -408,21 +465,22 @@ class _VendaFormularioView(UsuarioComumMixin, View):
         )
 
     def get(self, request, *args, **kwargs):
-        form, formset = self._forms(request)
-        return self._render(request, form, formset)
+        form, formset, pformset = self._forms(request)
+        return self._render(request, form, formset, pformset)
 
     def post(self, request, *args, **kwargs):
-        form, formset = self._forms(request, request.POST)
-        if form.is_valid() and formset.is_valid():
+        form, formset, pformset = self._forms(request, request.POST)
+        # all() avalia os três (assim todos os erros aparecem de uma vez)
+        if all([form.is_valid(), formset.is_valid(), pformset.is_valid()]):
             try:
-                resposta = self._salvar(request, form, formset)
+                resposta = self._salvar(request, form, formset, pformset)
             except EstoqueInsuficiente as e:
                 form.add_error(None, str(e))
             except VendaInvalida as e:
                 form.add_error(None, str(e))
             else:
                 return resposta
-        return self._render(request, form, formset)
+        return self._render(request, form, formset, pformset)
 
 
 class VendaCreateView(_VendaFormularioView):
@@ -431,13 +489,22 @@ class VendaCreateView(_VendaFormularioView):
         formset = ItemVendaFormSet(
             data, prefix="itens", form_kwargs={"usuario": request.user}
         )
-        return form, formset
+        # Começa com 1 linha: Pix, já pago, hoje (o JS preenche o valor com o total)
+        pformset = PagamentoFormSet(
+            data,
+            initial=None
+            if data is not None
+            else [{"metodo": "pix", "data": timezone.localdate(), "pago": True}],
+            prefix="pgtos",
+        )
+        return form, formset, pformset
 
-    def _salvar(self, request, form, formset):
+    def _salvar(self, request, form, formset, pformset):
         venda = registrar_venda(
             usuario=request.user,
             cliente=form.cleaned_data["cliente"],
             itens=itens_da_formset(formset),
+            pagamentos=pagamentos_da_formset(pformset),
             data_venda=form.cleaned_data.get("data_venda"),
         )
         lucro = number_format(venda.lucro, 2, use_l10n=True, force_grouping=True)
@@ -483,15 +550,27 @@ class VendaUpdateView(_VendaFormularioView):
             prefix="itens",
             form_kwargs={"usuario": request.user},
         )
-        return form, formset
+        pformset = PagamentoFormSet(
+            data,
+            initial=None if data is not None else self._initial_pagamentos(),
+            prefix="pgtos",
+        )
+        return form, formset, pformset
 
-    def _salvar(self, request, form, formset):
+    def _initial_pagamentos(self):
+        return [
+            {"metodo": p.metodo, "valor": p.valor, "data": p.data, "pago": p.pago}
+            for p in self.venda.pagamentos.all()
+        ]
+
+    def _salvar(self, request, form, formset, pformset):
         atualizar_venda(
             usuario=request.user,
             venda_id=self.venda.pk,
             cliente=form.cleaned_data["cliente"],
             data_venda=form.cleaned_data.get("data_venda"),
             itens=itens_da_formset(formset),
+            pagamentos=pagamentos_da_formset(pformset),
         )
         messages.success(request, "Venda atualizada e estoque ajustado com sucesso!")
         return HttpResponseRedirect(self.success_url)
@@ -505,7 +584,7 @@ class VendaDeleteView(DonoQuerysetMixin, DeleteView):
     success_url = reverse_lazy("gestao:venda_list")
 
     def get_queryset(self):
-        return super().get_queryset().prefetch_related("itens__produto")
+        return super().get_queryset().prefetch_related("itens__produto", "pagamentos")
 
     def form_valid(self, form):
         try:
@@ -536,6 +615,7 @@ class ItemVendaDeleteView(DonoQuerysetMixin, DeleteView):
         return ctx
 
     def form_valid(self, form):
+        venda_id = self.object.venda_id
         try:
             venda_inteira = estornar_item(
                 usuario=self.request.user, item_id=self.object.pk
@@ -548,8 +628,53 @@ class ItemVendaDeleteView(DonoQuerysetMixin, DeleteView):
                 self.request,
                 "Era o único item: a venda foi revertida por completo e o estoque devolvido.",
             )
-        else:
-            messages.success(
-                self.request, "Item revertido e devolvido ao estoque. Totais da venda atualizados."
+            return HttpResponseRedirect(self.success_url)
+        venda = Venda.objects.do_usuario(self.request.user).get(pk=venda_id)
+        if venda.pagamentos_resumo()["estado"] == "ajustar":
+            messages.warning(
+                self.request,
+                "Item revertido e devolvido ao estoque. O total da venda mudou: "
+                "ajuste os pagamentos abaixo e salve.",
             )
+            return redirect("gestao:venda_update", pk=venda_id)
+        messages.success(
+            self.request, "Item revertido e devolvido ao estoque. Totais da venda atualizados."
+        )
         return HttpResponseRedirect(self.success_url)
+
+
+class _PagamentoAcaoView(UsuarioComumMixin, View):
+    """Marca/desmarca UM pagamento como pago (só POST; só o dono da venda)."""
+
+    http_method_names = ["post"]
+    pago = True
+
+    def post(self, request, pk):
+        pagamento = get_object_or_404(
+            Pagamento.objects.do_usuario(request.user), pk=pk
+        )
+        if self.pago:
+            # A data passa a ser a do recebimento (hoje)
+            pagamento.pago, pagamento.data = True, timezone.localdate()
+            pagamento.save(update_fields=["pago", "data"])
+            messages.success(
+                request, f"Pagamento de R$ {number_format(pagamento.valor, 2, use_l10n=True, force_grouping=True)} confirmado."
+            )
+        else:
+            pagamento.pago = False
+            pagamento.save(update_fields=["pago"])
+            messages.info(request, "Pagamento voltou para pendente.")
+        destino = request.POST.get("next", "")
+        if not url_has_allowed_host_and_scheme(
+            destino, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+        ):
+            destino = reverse_lazy("gestao:venda_list")
+        return HttpResponseRedirect(destino)
+
+
+class PagamentoConfirmarView(_PagamentoAcaoView):
+    pago = True
+
+
+class PagamentoDesfazerView(_PagamentoAcaoView):
+    pago = False

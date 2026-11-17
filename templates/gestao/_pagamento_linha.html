@@ -1,0 +1,27 @@
+{# Uma linha de pagamento da venda. Contexto: form (PagamentoForm). #}
+<div class="pgto-linha border rounded p-2 mb-2">
+  <div class="row g-2 align-items-start">
+    <div class="col-6 col-md-3">
+      <label class="form-label small mb-1">Meio</label>
+      {{ form.metodo }}
+      {% for erro in form.metodo.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small mb-1">Valor (R$)</label>
+      {{ form.valor }}
+      {% for erro in form.valor.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small mb-1"><span class="lbl-data">Data</span></label>
+      {{ form.data }}
+      {% for erro in form.data.errors %}<div class="text-danger small mt-1">{{ erro }}</div>{% endfor %}
+    </div>
+    <div class="col-6 col-md-3 d-flex align-items-center justify-content-between pt-md-4">
+      <div class="form-check mb-0">
+        {{ form.pago }}
+        <label class="form-check-label small" for="{{ form.pago.id_for_label }}">Já pago</label>
+      </div>
+      <button type="button" class="btn btn-outline-danger btn-sm btn-remover-pgto">Remover</button>
+    </div>
+  </div>
+</div>

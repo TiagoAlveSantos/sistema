@@ -7,8 +7,8 @@ from django.utils import timezone
 
 from accounts.testutils import SENHA, criar_admin, criar_usuario, sem_axes
 
-from .models import Cliente, ItemVenda, Produto, Prospeccao, Venda
-from .services import registrar_venda
+from .models import Cliente, ItemVenda, Pagamento, Produto, Prospeccao, Venda
+from .services import VendaInvalida, registrar_venda
 
 
 def agora_str():
@@ -21,10 +21,16 @@ def item(produto, quantidade, preco):
     return {"produto": produto, "quantidade": quantidade, "preco": Decimal(preco)}
 
 
-def dados_venda(cliente, linhas, data=None, iniciais=0):
+def hoje_str():
+    return timezone.localdate().strftime("%Y-%m-%d")
+
+
+def dados_venda(cliente, linhas, data=None, iniciais=0, pagamentos=None):
     """
-    Monta o POST do formulário de venda (cabeçalho + formset 'itens').
+    Monta o POST do formulário de venda (cabeçalho + formsets 'itens' e 'pgtos').
     Cada linha: {"produto": Produto|None, "quantidade": n, "preco": "x.xx", "item_id": id|None}.
+    `pagamentos`: lista de {"metodo", "valor", "data", "pago"}; sem ela, a venda é paga
+    de uma vez (1 pagamento Pix, já pago, no valor da soma das linhas).
     """
     dados = {
         "cliente": cliente.pk,
@@ -40,6 +46,29 @@ def dados_venda(cliente, linhas, data=None, iniciais=0):
         dados[f"itens-{i}-produto"] = produto.pk if produto else ""
         dados[f"itens-{i}-quantidade"] = linha["quantidade"]
         dados[f"itens-{i}-preco_venda_praticado"] = linha["preco"]
+
+    if pagamentos is None:
+        total = Decimal("0.00")
+        for linha in linhas:
+            try:
+                total += Decimal(str(linha["quantidade"])) * Decimal(str(linha["preco"]))
+            except Exception:  # linha vazia/inválida: o teste verifica o erro dos itens
+                pass
+        pagamentos = [{"metodo": "pix", "valor": total, "data": hoje_str(), "pago": True}]
+    dados.update(
+        {
+            "pgtos-TOTAL_FORMS": len(pagamentos),
+            "pgtos-INITIAL_FORMS": 0,
+            "pgtos-MIN_NUM_FORMS": 0,
+            "pgtos-MAX_NUM_FORMS": 1000,
+        }
+    )
+    for i, p in enumerate(pagamentos):
+        dados[f"pgtos-{i}-metodo"] = p.get("metodo", "pix")
+        dados[f"pgtos-{i}-valor"] = p["valor"]
+        dados[f"pgtos-{i}-data"] = p.get("data", hoje_str())
+        if p.get("pago"):
+            dados[f"pgtos-{i}-pago"] = "on"
     return dados
 
 
@@ -611,7 +640,8 @@ class VendaReversaoTests(TestCase):
         self.assertEqual(self.client.get(url).status_code, 200)  # confirmação não altera
 
         resp = self.client.post(url)
-        self.assertRedirects(resp, reverse("gestao:venda_list"))
+        # o total mudou e os pagamentos já não fecham: vai direto para a edição
+        self.assertRedirects(resp, reverse("gestao:venda_update", args=[self.venda.pk]))
         self.assertEqual(self._qtd(self.caneta), 10)  # voltou
         self.assertEqual(self._qtd(self.lapis), 14)   # intacto
         self.venda.refresh_from_db()
@@ -880,3 +910,290 @@ class LimitesTests(TestCase):
     def test_novo_item_nao_tem_o_campo_de_quantidade_original(self):
         resp = self.client.get(reverse("gestao:produto_create"))
         self.assertNotContains(resp, "quantidade_original")
+
+
+# ==========================================================================
+# Pagamentos
+# ==========================================================================
+@sem_axes
+class PagamentoTests(TestCase):
+    def setUp(self):
+        self.user = criar_usuario("ana")
+        self.cliente = Cliente.objects.create(usuario=self.user, nome="Loja X")
+        self.caneta = Produto.objects.create(
+            usuario=self.user, nome="Caneta", quantidade=50,
+            preco_compra=Decimal("2.00"), preco_venda=Decimal("5.00"),
+        )
+        self.client.login(username="ana", password=SENHA)
+        self.hoje = timezone.localdate()
+
+    def _venda(self, qtd=10, preco="10.00", pagamentos=None):
+        return registrar_venda(
+            usuario=self.user, cliente=self.cliente,
+            itens=[item(self.caneta, qtd, preco)], pagamentos=pagamentos,
+        )
+
+    def _pg(self, valor, dias=0, pago=False, metodo="pix"):
+        return {
+            "metodo": metodo, "valor": Decimal(valor),
+            "data": self.hoje + timedelta(days=dias), "pago": pago,
+        }
+
+    # ---- serviço ----
+    def test_sem_pagamentos_a_venda_nasce_quitada(self):
+        v = self._venda()
+        p = v.pagamentos.get()
+        self.assertEqual((p.valor, p.pago), (Decimal("100.00"), True))
+        self.assertEqual(v.pagamentos_resumo()["estado"], "quitado")
+
+    def test_pagamentos_que_nao_fecham_sao_recusados_e_nada_e_gravado(self):
+        with self.assertRaises(VendaInvalida):
+            self._venda(pagamentos=[self._pg("60.00", pago=True), self._pg("30.00", 30)])
+        self.assertEqual(Venda.objects.count(), 0)
+        self.caneta.refresh_from_db()
+        self.assertEqual(self.caneta.quantidade, 50)  # estoque intacto
+
+    def test_pagamentos_que_passam_do_total_sao_recusados(self):
+        with self.assertRaises(VendaInvalida):
+            self._venda(pagamentos=[self._pg("100.01", pago=True)])
+
+    def test_pagamento_parte_paga_parte_pendente(self):
+        v = self._venda(pagamentos=[self._pg("40.00", pago=True), self._pg("60.00", 30)])
+        r = v.pagamentos_resumo()
+        self.assertEqual((r["estado"], r["pago"], r["pendente"]), ("pendente", Decimal("40.00"), Decimal("60.00")))
+
+    def test_pendente_vencido_vira_atrasado(self):
+        v = self._venda(pagamentos=[self._pg("100.00", -3)])
+        self.assertEqual(v.pagamentos_resumo()["estado"], "atrasado")
+
+    # ---- formulário ----
+    def test_nova_venda_parcelada_pelo_formulario(self):
+        pg = [
+            {"metodo": "pix", "valor": "40.00", "data": hoje_str(), "pago": True},
+            {"metodo": "credito", "valor": "30.00", "data": (self.hoje + timedelta(days=30)).isoformat()},
+            {"metodo": "credito", "valor": "30.00", "data": (self.hoje + timedelta(days=60)).isoformat()},
+        ]
+        resp = self.client.post(
+            reverse("gestao:venda_create"),
+            dados_venda(self.cliente, [{"produto": self.caneta, "quantidade": 10, "preco": "10.00"}], pagamentos=pg),
+        )
+        self.assertRedirects(resp, reverse("gestao:venda_list"))
+        v = Venda.objects.get()
+        self.assertEqual(v.pagamentos.count(), 3)
+        self.assertEqual(v.pagamentos.filter(pago=True).count(), 1)
+
+    def test_formulario_recusa_pagamentos_que_nao_fecham(self):
+        pg = [{"metodo": "pix", "valor": "50.00", "data": hoje_str(), "pago": True}]
+        resp = self.client.post(
+            reverse("gestao:venda_create"),
+            dados_venda(self.cliente, [{"produto": self.caneta, "quantidade": 10, "preco": "10.00"}], pagamentos=pg),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Os pagamentos somam")
+        self.assertEqual(Venda.objects.count(), 0)
+        self.caneta.refresh_from_db()
+        self.assertEqual(self.caneta.quantidade, 50)
+
+    def test_pagamento_pago_com_data_futura_e_recusado(self):
+        pg = [{"metodo": "pix", "valor": "100.00",
+               "data": (self.hoje + timedelta(days=5)).isoformat(), "pago": True}]
+        resp = self.client.post(
+            reverse("gestao:venda_create"),
+            dados_venda(self.cliente, [{"produto": self.caneta, "quantidade": 10, "preco": "10.00"}], pagamentos=pg),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Venda.objects.count(), 0)
+
+    # ---- edição ----
+    def test_editar_itens_exige_ajustar_os_pagamentos(self):
+        v = self._venda(pagamentos=[self._pg("100.00", pago=True)])
+        it = v.itens.get()
+        linhas = [{"item_id": it.pk, "quantidade": 5, "preco": "10.00"}]  # total passa a 50
+        # pagamentos antigos (100) não fecham
+        resp = self.client.post(
+            reverse("gestao:venda_update", args=[v.pk]),
+            dados_venda(self.cliente, linhas, iniciais=1,
+                        pagamentos=[{"metodo": "pix", "valor": "100.00", "data": hoje_str(), "pago": True}]),
+        )
+        self.assertEqual(resp.status_code, 200)
+        it.refresh_from_db()
+        self.assertEqual(it.quantidade, 10)  # nada mudou
+        # ajustando, salva
+        resp = self.client.post(
+            reverse("gestao:venda_update", args=[v.pk]),
+            dados_venda(self.cliente, linhas, iniciais=1,
+                        pagamentos=[{"metodo": "pix", "valor": "50.00", "data": hoje_str(), "pago": True}]),
+        )
+        self.assertRedirects(resp, reverse("gestao:venda_list"))
+        v.refresh_from_db()
+        self.assertEqual(v.total, Decimal("50.00"))
+        self.assertEqual(v.pagamentos.get().valor, Decimal("50.00"))
+
+    def test_tela_de_edicao_mostra_pagamentos_existentes(self):
+        v = self._venda(pagamentos=[self._pg("40.00", pago=True), self._pg("60.00", 30)])
+        resp = self.client.get(reverse("gestao:venda_update", args=[v.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'name="pgtos-1-valor"')
+        self.assertContains(resp, 'value="60.00"')
+
+    def test_linha_de_pagamento_removida_no_navegador_nao_gera_erro(self):
+        v = self._venda(pagamentos=[self._pg("40.00", pago=True), self._pg("60.00", 30)])
+        it = v.itens.get()
+        dados = dados_venda(self.cliente, [{"item_id": it.pk, "quantidade": 10, "preco": "10.00"}], iniciais=1,
+                            pagamentos=[{"metodo": "pix", "valor": "100.00", "data": hoje_str(), "pago": True}])
+        # simula o navegador: TOTAL_FORMS=3, mas só o índice 2 foi enviado (0 e 1 removidos)
+        for k in ("metodo", "valor", "data", "pago"):
+            if f"pgtos-0-{k}" in dados:
+                dados[f"pgtos-2-{k}"] = dados.pop(f"pgtos-0-{k}")
+        dados["pgtos-TOTAL_FORMS"] = 3
+        resp = self.client.post(reverse("gestao:venda_update", args=[v.pk]), dados)
+        self.assertRedirects(resp, reverse("gestao:venda_list"))
+        self.assertEqual(v.pagamentos.count(), 1)
+
+    def test_erro_nao_recria_linha_em_branco_de_pagamento_removida(self):
+        # Navegador: TOTAL_FORMS=3, mas só o índice 2 foi enviado (0 e 1 removidos) e a soma não fecha
+        dados = dados_venda(
+            self.cliente,
+            [{"produto": self.caneta, "quantidade": 10, "preco": "10.00"}],
+            pagamentos=[{"metodo": "pix", "valor": "50.00", "data": hoje_str(), "pago": True}],
+        )
+        for k in ("metodo", "valor", "data", "pago"):
+            if f"pgtos-0-{k}" in dados:
+                dados[f"pgtos-2-{k}"] = dados.pop(f"pgtos-0-{k}")
+        dados["pgtos-TOTAL_FORMS"] = 3
+        resp = self.client.post(reverse("gestao:venda_create"), dados)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Os pagamentos somam")
+        self.assertContains(resp, 'name="pgtos-2-valor"')
+        self.assertNotContains(resp, 'name="pgtos-0-valor"')
+        self.assertNotContains(resp, 'name="pgtos-1-valor"')
+
+    # ---- reversão ----
+    def test_reverter_um_item_com_pagamento_fechado_pede_ajuste(self):
+        outro = Produto.objects.create(
+            usuario=self.user, nome="Lápis", quantidade=20,
+            preco_compra=Decimal("1.00"), preco_venda=Decimal("3.00"),
+        )
+        v = registrar_venda(
+            usuario=self.user, cliente=self.cliente,
+            itens=[item(self.caneta, 2, "10.00"), item(outro, 4, "5.00")],
+        )
+        self.assertEqual(v.total, Decimal("40.00"))
+        it = v.itens.get(produto=outro)
+        resp = self.client.post(reverse("gestao:item_venda_delete", args=[it.pk]))
+        self.assertRedirects(resp, reverse("gestao:venda_update", args=[v.pk]))
+        v = Venda.objects.get(pk=v.pk)
+        self.assertEqual(v.pagamentos_resumo()["estado"], "ajustar")
+
+    def test_reverter_venda_apaga_os_pagamentos(self):
+        v = self._venda()
+        self.client.post(reverse("gestao:venda_delete", args=[v.pk]))
+        self.assertEqual(Pagamento.objects.count(), 0)
+
+    # ---- confirmar / desfazer ----
+    def test_confirmar_e_desfazer_pagamento(self):
+        v = self._venda(pagamentos=[self._pg("100.00", 30)])
+        p = v.pagamentos.get()
+        resp = self.client.post(reverse("gestao:pagamento_confirmar", args=[p.pk]))
+        self.assertRedirects(resp, reverse("gestao:venda_list"))
+        p.refresh_from_db()
+        self.assertTrue(p.pago)
+        self.assertEqual(p.data, self.hoje)
+        self.client.post(reverse("gestao:pagamento_desfazer", args=[p.pk]))
+        p.refresh_from_db()
+        self.assertFalse(p.pago)
+
+    def test_confirmar_exige_post(self):
+        v = self._venda(pagamentos=[self._pg("100.00", 30)])
+        p = v.pagamentos.get()
+        resp = self.client.get(reverse("gestao:pagamento_confirmar", args=[p.pk]))
+        self.assertEqual(resp.status_code, 405)
+        p.refresh_from_db()
+        self.assertFalse(p.pago)
+
+    def test_next_externo_e_ignorado(self):
+        v = self._venda(pagamentos=[self._pg("100.00", 30)])
+        p = v.pagamentos.get()
+        resp = self.client.post(
+            reverse("gestao:pagamento_confirmar", args=[p.pk]), {"next": "https://evil.example/"}
+        )
+        self.assertRedirects(resp, reverse("gestao:venda_list"))
+
+    def test_nao_confirma_pagamento_de_outro_usuario(self):
+        bia = criar_usuario("bia")
+        cli = Cliente.objects.create(usuario=bia, nome="Cliente da Bia")
+        prod = Produto.objects.create(
+            usuario=bia, nome="X", quantidade=5,
+            preco_compra=Decimal("1.00"), preco_venda=Decimal("2.00"),
+        )
+        vb = registrar_venda(
+            usuario=bia, cliente=cli, itens=[item(prod, 1, "2.00")],
+            pagamentos=[{"metodo": "pix", "valor": Decimal("2.00"), "data": self.hoje, "pago": False}],
+        )
+        p = vb.pagamentos.get()
+        resp = self.client.post(reverse("gestao:pagamento_confirmar", args=[p.pk]))
+        self.assertEqual(resp.status_code, 404)
+        p.refresh_from_db()
+        self.assertFalse(p.pago)
+
+    # ---- lista / filtros ----
+    def test_filtros_da_lista_de_vendas(self):
+        quitada = self._venda(qtd=1)
+        pendente = self._venda(qtd=2, pagamentos=[self._pg("20.00", 15)])
+        atrasada = self._venda(qtd=3, pagamentos=[self._pg("10.00", pago=True), self._pg("20.00", -5)])
+        ajustar = self._venda(qtd=4)
+        ajustar.pagamentos.update(valor=Decimal("1.00"))
+        url = reverse("gestao:venda_list")
+
+        def ids(filtro):
+            resp = self.client.get(url, {"pagamento": filtro})
+            return {v.pk for v in resp.context["object_list"]}
+
+        self.assertEqual(ids("quitado"), {quitada.pk})
+        self.assertEqual(ids("pendente"), {pendente.pk, atrasada.pk})
+        self.assertEqual(ids("atrasado"), {atrasada.pk})
+        self.assertEqual(ids("ajustar"), {ajustar.pk})
+        self.assertEqual(len(ids("")), 4)
+        self.assertEqual(len(ids("lixo")), 4)  # valor inválido é ignorado
+
+    def test_filtro_nao_mostra_vendas_de_outro_usuario(self):
+        bia = criar_usuario("bia")
+        cli = Cliente.objects.create(usuario=bia, nome="Cliente da Bia")
+        prod = Produto.objects.create(
+            usuario=bia, nome="X", quantidade=5,
+            preco_compra=Decimal("1.00"), preco_venda=Decimal("2.00"),
+        )
+        registrar_venda(
+            usuario=bia, cliente=cli, itens=[item(prod, 1, "2.00")],
+            pagamentos=[{"metodo": "pix", "valor": Decimal("2.00"), "data": self.hoje, "pago": False}],
+        )
+        resp = self.client.get(reverse("gestao:venda_list"), {"pagamento": "pendente"})
+        self.assertEqual(len(resp.context["object_list"]), 0)
+
+    # ---- dashboard ----
+    def test_dashboard_recebido_a_receber_e_atrasado(self):
+        self._venda(pagamentos=[self._pg("30.00", pago=True), self._pg("50.00", 0), self._pg("20.00", -2)])
+        resp = self.client.get(reverse("gestao:dashboard"), {"ano": "todos"})
+        self.assertEqual(resp.context["recebido"], Decimal("30.00"))
+        self.assertEqual(resp.context["a_receber"], Decimal("70.00"))
+        self.assertEqual(resp.context["atrasado"], Decimal("20.00"))
+        self.assertEqual(resp.context["total_vendas"], Decimal("100.00"))  # vendas/lucro como antes
+
+
+@sem_axes
+class OrdemDosItensNaVendaTests(TestCase):
+    def test_itens_do_formulario_de_venda_em_ordem_alfabetica(self):
+        user = criar_usuario("ana")
+        for nome in ["banana", "Cebola", "abacate"]:
+            Produto.objects.create(
+                usuario=user, nome=nome, quantidade=1,
+                preco_compra=Decimal("1.00"), preco_venda=Decimal("2.00"),
+            )
+        Produto.objects.create(  # sem estoque: não aparece
+            usuario=user, nome="Aaa sem estoque", quantidade=0,
+            preco_compra=Decimal("1.00"), preco_venda=Decimal("2.00"),
+        )
+        self.client.login(username="ana", password=SENHA)
+        resp = self.client.get(reverse("gestao:venda_create"))
+        nomes = [p.nome for p in resp.context["formset"].forms[0].fields["produto"].queryset]
+        self.assertEqual(nomes, ["abacate", "banana", "Cebola"])

@@ -3,6 +3,11 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+<style>
+  /* "Selecione o item..." aparece antes do clique e some ao focar, para digitar a pesquisa */
+  .ts-wrapper.focus .ts-control > input::placeholder { color: transparent; }
+</style>
 {% endblock %}
 
 {% block content %}
@@ -21,10 +26,11 @@
             <a href="{% url 'gestao:cliente_create' %}">Novo cliente</a>.</div>
         {% endif %}
 
-        {% if form.non_field_errors or formset.non_form_errors %}
+        {% if form.non_field_errors or formset.non_form_errors or pformset.non_form_errors %}
           <div class="alert alert-danger" role="alert">
             {% for erro in form.non_field_errors %}<div>{{ erro }}</div>{% endfor %}
             {% for erro in formset.non_form_errors %}<div>{{ erro }}</div>{% endfor %}
+            {% for erro in pformset.non_form_errors %}<div>{{ erro }}</div>{% endfor %}
           </div>
         {% endif %}
 
@@ -48,13 +54,59 @@
           <h2 class="h6 mt-4 mb-2">Itens da venda</h2>
           {{ formset.management_form }}
           <div id="itens-container">
-            {% for f in formset %}
+            {% for f in formset.forms_visiveis %}
               {% include 'gestao/_item_linha.html' with form=f %}
             {% endfor %}
           </div>
           <button type="button" id="btn-add-item" class="btn btn-outline-primary btn-sm mb-3">+ Adicionar item</button>
 
           <div id="resumo-venda" class="alert alert-info py-2 small d-none" role="status"></div>
+
+          <h2 class="h6 mt-4 mb-2">Pagamento</h2>
+          <p class="form-text mt-0">Informe como o valor foi (ou será) pago. Marque “Já pago” no que já entrou;
+            o que ficar pendente você confirma depois na lista de vendas. A soma precisa fechar com o total.</p>
+          {{ pformset.management_form }}
+          <div id="pgtos-container">
+            {% for f in pformset.forms_visiveis %}
+              {% include 'gestao/_pagamento_linha.html' with form=f %}
+            {% endfor %}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mb-2">
+            <button type="button" id="btn-add-pgto" class="btn btn-outline-primary btn-sm">+ Adicionar pagamento</button>
+            <button type="button" id="btn-parcelar-abrir" class="btn btn-outline-secondary btn-sm"
+                    data-bs-toggle="collapse" data-bs-target="#painel-parcelar" aria-expanded="false">Parcelar…</button>
+          </div>
+          <div class="collapse" id="painel-parcelar">
+            <div class="border rounded p-3 mb-3 bg-body-tertiary">
+              <div class="row g-2 align-items-end">
+                <div class="col-6 col-md-2">
+                  <label class="form-label small mb-1" for="parc-n">Parcelas</label>
+                  <input type="number" id="parc-n" class="form-control" min="2" max="48" value="2">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small mb-1" for="parc-metodo">Meio</label>
+                  <select id="parc-metodo" class="form-select">
+                    {% for valor, rotulo in metodos %}<option value="{{ valor }}">{{ rotulo }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small mb-1" for="parc-data">1ª parcela em</label>
+                  <input type="date" id="parc-data" class="form-control">
+                </div>
+                <div class="col-6 col-md-4">
+                  <div class="form-check mb-1">
+                    <input type="checkbox" id="parc-primeira-paga" class="form-check-input">
+                    <label class="form-check-label small" for="parc-primeira-paga">1ª parcela já paga (entrada)</label>
+                  </div>
+                  <button type="button" id="btn-parcelar" class="btn btn-secondary btn-sm">Gerar parcelas</button>
+                </div>
+              </div>
+              <div class="form-text">Divide o total em parcelas mensais iguais (a diferença de centavos vai na 1ª).
+                Substitui as linhas de pagamento atuais; depois você pode ajustar cada uma.</div>
+            </div>
+          </div>
+          <div id="resumo-pgto" class="alert py-2 small d-none" role="status"></div>
+
           <div class="d-flex gap-2">
             <button type="submit" class="btn btn-primary">{% if object %}Salvar alterações{% else %}Finalizar venda{% endif %}</button>
             <a href="{% url 'gestao:venda_list' %}" class="btn btn-outline-secondary">Cancelar</a>
@@ -67,13 +119,35 @@
 
 {# Modelo de linha em branco, clonado pelo botão "Adicionar item" #}
 <template id="linha-modelo">{% include 'gestao/_item_linha.html' with form=formset.empty_form %}</template>
+<template id="pgto-modelo">{% include 'gestao/_pagamento_linha.html' with form=pformset.empty_form %}</template>
 {{ produtos_info|json_script:"produtos-info" }}
 {% endblock %}
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/pt.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 
+<script id="pgto-puro">
+// Funções puras (em centavos inteiros, sem erro de ponto flutuante).
+function dividirCentavos(total, n) {
+  var base = Math.floor(total / n), resto = total - base * n, r = [];
+  for (var i = 0; i < n; i++) { r.push(base + (i === 0 ? resto : 0)); }
+  return r;
+}
+function somarMeses(iso, k) {
+  var p = iso.split('-').map(Number), y = p[0], m = p[1] - 1 + k, d = p[2];
+  y += Math.floor(m / 12); m = ((m % 12) + 12) % 12;
+  var ultimo = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  d = Math.min(d, ultimo);
+  function z(x) { return (x < 10 ? '0' : '') + x; }
+  return y + '-' + z(m + 1) + '-' + z(d);
+}
+function centavos(txt) {
+  var v = parseFloat(txt);
+  return isNaN(v) ? null : Math.round(v * 100);
+}
+</script>
 <script>
 (function () {
   // ---------- Data e hora (Flatpickr) ----------
@@ -107,8 +181,11 @@
     return p ? parseFloat(p.custo) : null;
   }
 
+  var totalCent = 0;
+
   function atualizar() {
     var total = 0, lucro = 0, n = 0;
+    totalCent = 0;
     cont.querySelectorAll('.item-linha').forEach(function (linha) {
       var q = parseInt(campo(linha, 'quantidade').value, 10);
       var v = parseFloat(campo(linha, 'preco_venda_praticado').value);
@@ -117,15 +194,123 @@
       if (isNaN(q) || isNaN(v)) { rotulo.textContent = ''; return; }
       rotulo.textContent = brl(q * v);
       total += q * v; n += 1;
+      totalCent += q * Math.round(v * 100);
       if (c !== null) { lucro += (v - c) * q; }
     });
-    if (n === 0) { resumo.classList.add('d-none'); return; }
-    resumo.textContent = n + ' item(ns)  ·  Total: ' + brl(total) + '  ·  Lucro estimado: ' + brl(lucro);
-    resumo.classList.remove('d-none');
+    if (n === 0) { resumo.classList.add('d-none'); }
+    else {
+      resumo.textContent = n + ' item(ns)  ·  Total: ' + brl(total) + '  ·  Lucro estimado: ' + brl(lucro);
+      resumo.classList.remove('d-none');
+    }
+    atualizarPgtos();
+  }
+
+  // ---------- Pagamentos ----------
+  var pcont = document.getElementById('pgtos-container');
+  var ptotal = document.getElementById('id_pgtos-TOTAL_FORMS');
+  var pmodelo = document.getElementById('pgto-modelo');
+  var presumo = document.getElementById('resumo-pgto');
+
+  function hojeISO() {
+    var d = new Date(), z = function (x) { return (x < 10 ? '0' : '') + x; };
+    return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate());
+  }
+  function linhasPgto() { return Array.prototype.slice.call(pcont.querySelectorAll('.pgto-linha')); }
+  function pfield(linha, nome) { return linha.querySelector('[name$="-' + nome + '"]'); }
+
+  function atualizarPgtos() {
+    var linhas = linhasPgto();
+    // Uma única linha ainda não mexida acompanha o total da venda
+    if (linhas.length === 1 && !linhas[0].dataset.manual && totalCent > 0) {
+      pfield(linhas[0], 'valor').value = (totalCent / 100).toFixed(2);
+    }
+    var pago = 0, pend = 0;
+    linhas.forEach(function (l) {
+      var c = centavos(pfield(l, 'valor').value);
+      var marcado = pfield(l, 'pago').checked;
+      l.querySelector('.lbl-data').textContent = marcado ? 'Pago em' : 'Vence em';
+      if (c === null) { return; }
+      if (marcado) { pago += c; } else { pend += c; }
+    });
+    var soma = pago + pend, dif = totalCent - soma;
+    var txt = 'Pagamentos: ' + brl(soma / 100) + ' de ' + brl(totalCent / 100) +
+              '  ·  Recebido: ' + brl(pago / 100) + '  ·  Pendente: ' + brl(pend / 100);
+    var fecha = totalCent > 0 && dif === 0;
+    if (dif > 0) { txt += '  ·  Faltam ' + brl(dif / 100); }
+    else if (dif < 0) { txt += '  ·  Sobram ' + brl(-dif / 100); }
+    else if (fecha) { txt += '  ·  ✓ Fecha com o total'; }
+    presumo.textContent = txt;
+    presumo.classList.toggle('alert-success', fecha);
+    presumo.classList.toggle('alert-warning', !fecha);
+    presumo.classList.remove('d-none');
+  }
+
+  function ligarPgto(linha) {
+    var valor = pfield(linha, 'valor');
+    if (valor.value) { linha.dataset.manual = '1'; }
+    valor.addEventListener('input', function () { linha.dataset.manual = '1'; atualizarPgtos(); });
+    pfield(linha, 'pago').addEventListener('change', atualizarPgtos);
+    linha.querySelector('.btn-remover-pgto').addEventListener('click', function () {
+      linha.remove(); atualizarPgtos();
+    });
+  }
+
+  function novaLinhaPgto(v) {
+    var idx = parseInt(ptotal.value, 10);
+    var caixa = document.createElement('div');
+    caixa.innerHTML = pmodelo.innerHTML.replace(/__prefix__/g, idx);
+    var linha = caixa.firstElementChild;
+    pfield(linha, 'metodo').value = v.metodo || 'pix';
+    pfield(linha, 'valor').value = v.valor || '';
+    pfield(linha, 'data').value = v.data || hojeISO();
+    pfield(linha, 'pago').checked = !!v.pago;
+    if (v.valor) { linha.dataset.manual = '1'; }
+    pcont.appendChild(linha);
+    ptotal.value = idx + 1;  // nunca diminui: linhas removidas viram "vazias" no servidor
+    ligarPgto(linha);
+    return linha;
+  }
+
+  document.getElementById('btn-add-pgto').addEventListener('click', function () {
+    var linhas = linhasPgto();
+    if (linhas.length === 1) { linhas[0].dataset.manual = '1'; }  // vai dividir: para de acompanhar o total
+    var soma = 0;
+    linhas.forEach(function (l) { var c = centavos(pfield(l, 'valor').value); if (c) { soma += c; } });
+    var resto = totalCent - soma;
+    novaLinhaPgto({ valor: resto > 0 ? (resto / 100).toFixed(2) : '', pago: false });
+    atualizarPgtos();
+  });
+
+  document.getElementById('parc-data').value = hojeISO();
+  document.getElementById('btn-parcelar').addEventListener('click', function () {
+    var n = parseInt(document.getElementById('parc-n').value, 10);
+    var primeira = document.getElementById('parc-data').value;
+    if (!(n >= 2 && n <= 48) || !primeira) { alert('Informe o número de parcelas (2 a 48) e a data da 1ª parcela.'); return; }
+    if (totalCent <= 0) { alert('Adicione os itens da venda antes de parcelar.'); return; }
+    linhasPgto().forEach(function (l) { l.remove(); });
+    var partes = dividirCentavos(totalCent, n);
+    var metodo = document.getElementById('parc-metodo').value;
+    var entrada = document.getElementById('parc-primeira-paga').checked;
+    partes.forEach(function (c, i) {
+      novaLinhaPgto({ metodo: metodo, valor: (c / 100).toFixed(2), data: somarMeses(primeira, i), pago: entrada && i === 0 });
+    });
+    atualizarPgtos();
+  });
+
+  // Caixa de seleção com pesquisa (digite parte do nome). Se a biblioteca não carregar,
+  // o <select> comum continua funcionando.
+  function pesquisavel(sel) {
+    if (!sel || typeof TomSelect === 'undefined') { return; }
+    new TomSelect(sel, {
+      maxOptions: null,
+      placeholder: 'Selecione o item...',
+      render: { no_results: function () { return '<div class="no-results">Nenhum item encontrado</div>'; } }
+    });
   }
 
   function ligar(linha) {
     var sel = campo(linha, 'produto');
+    pesquisavel(sel);
     var qtd = campo(linha, 'quantidade');
     var preco = campo(linha, 'preco_venda_praticado');
     if (linha.dataset.max) { qtd.max = linha.dataset.max; }
@@ -161,6 +346,7 @@
 
   document.getElementById('btn-add-item').addEventListener('click', adicionarLinha);
   cont.querySelectorAll('.item-linha').forEach(ligar);
+  linhasPgto().forEach(ligarPgto);
   atualizar();
 })();
 </script>

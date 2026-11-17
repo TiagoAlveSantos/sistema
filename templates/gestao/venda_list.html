@@ -7,7 +7,7 @@
   <a href="{% url 'gestao:venda_create' %}" class="btn btn-primary">Nova venda</a>
 </div>
 
-<!-- Formulário de Filtro por Cliente -->
+<!-- Filtros: cliente e situação do pagamento -->
 <form method="get" class="row g-3 mb-3">
     <div class="col-auto">
         <select name="cliente" class="form-select">
@@ -17,6 +17,15 @@
                     {{ c.nome }}
                 </option>
             {% endfor %}
+        </select>
+    </div>
+    <div class="col-auto">
+        <select name="pagamento" class="form-select">
+            <option value="">-- Todos os pagamentos --</option>
+            <option value="pendente" {% if filtro_pagamento == "pendente" %}selected{% endif %}>Com pagamento pendente</option>
+            <option value="atrasado" {% if filtro_pagamento == "atrasado" %}selected{% endif %}>Com pagamento atrasado</option>
+            <option value="quitado" {% if filtro_pagamento == "quitado" %}selected{% endif %}>Quitadas</option>
+            <option value="ajustar" {% if filtro_pagamento == "ajustar" %}selected{% endif %}>Pagamento a ajustar</option>
         </select>
     </div>
     <div class="col-auto">
@@ -36,12 +45,13 @@
           <th class="text-end">Itens</th>
           <th class="text-end">Total</th>
           <th class="text-end">Lucro</th>
+          <th>Pagamento</th>
           <th class="text-center">Ações</th>
         </tr>
       </thead>
       <tbody>
       {% for v in object_list %}
-        {% with itens=v.itens.all %}
+        {% with itens=v.itens.all pg=v.pagamentos_resumo %}
         <tr>
           <td>
             <button class="btn btn-sm btn-link text-decoration-none p-0 btn-detalhes" type="button"
@@ -55,6 +65,16 @@
           <td class="text-end">{{ itens|length }}</td>
           <td class="text-end">R$ {{ v.total|floatformat:"2g" }}</td>
           <td class="text-end {% if v.lucro < 0 %}text-danger{% else %}text-success{% endif %}">R$ {{ v.lucro|floatformat:"2g" }}</td>
+          <td>
+            {% if pg.estado == "quitado" %}<span class="badge text-bg-success">Quitado</span>
+            {% elif pg.estado == "atrasado" %}<span class="badge text-bg-danger">Atrasado</span>
+              <div class="small text-muted">R$ {{ pg.pendente|floatformat:"2g" }} a receber</div>
+            {% elif pg.estado == "pendente" %}<span class="badge text-bg-warning">Pendente</span>
+              <div class="small text-muted">R$ {{ pg.pendente|floatformat:"2g" }} a receber</div>
+            {% else %}<span class="badge text-bg-dark">Ajustar</span>
+              <div class="small text-muted">não fecha com o total</div>
+            {% endif %}
+          </td>
           <td class="text-center text-nowrap">
             <div class="btn-group btn-group-sm" role="group">
               <a href="{% url 'gestao:venda_update' v.pk %}" class="btn btn-outline-primary" title="Editar">Editar</a>
@@ -63,7 +83,7 @@
           </td>
         </tr>
         <tr>
-          <td colspan="7" class="p-0 border-0">
+          <td colspan="8" class="p-0 border-0">
             <div class="collapse" id="itens-{{ v.pk }}">
               <div class="bg-body-tertiary px-3 py-2">
                 <table class="table table-sm align-middle mb-0">
@@ -96,13 +116,48 @@
                   {% endfor %}
                   </tbody>
                 </table>
+
+                <div class="text-muted small mt-2 mb-1">Pagamentos</div>
+                {% if pg.estado == "ajustar" %}
+                  <div class="alert alert-warning py-1 small mb-2">Os pagamentos somam R$ {{ pg.soma|floatformat:"2g" }},
+                    mas o total é R$ {{ v.total|floatformat:"2g" }}.
+                    <a href="{% url 'gestao:venda_update' v.pk %}">Ajustar na edição</a>.</div>
+                {% endif %}
+                <table class="table table-sm align-middle mb-0">
+                  <tbody>
+                  {% for p in v.pagamentos.all %}
+                    <tr>
+                      <td>{{ p.get_metodo_display }}</td>
+                      <td class="text-end">R$ {{ p.valor|floatformat:"2g" }}</td>
+                      <td>
+                        {% if p.pago %}<span class="badge text-bg-success">Pago em {{ p.data|date:"d/m/Y" }}</span>
+                        {% else %}<span class="badge text-bg-warning">Vence em {{ p.data|date:"d/m/Y" }}</span>{% endif %}
+                      </td>
+                      <td class="text-end text-nowrap">
+                        <form method="post" class="d-inline"
+                              action="{% if p.pago %}{% url 'gestao:pagamento_desfazer' p.pk %}{% else %}{% url 'gestao:pagamento_confirmar' p.pk %}{% endif %}">
+                          {% csrf_token %}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          {% if p.pago %}
+                            <button type="submit" class="btn btn-outline-secondary btn-sm">Desfazer</button>
+                          {% else %}
+                            <button type="submit" class="btn btn-success btn-sm">Confirmar recebimento</button>
+                          {% endif %}
+                        </form>
+                      </td>
+                    </tr>
+                  {% empty %}
+                    <tr><td class="text-muted small">Sem pagamentos registrados.</td></tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
               </div>
             </div>
           </td>
         </tr>
         {% endwith %}
       {% empty %}
-        <tr><td colspan="7" class="text-center text-muted py-4">Nenhuma venda registrada ainda.</td></tr>
+        <tr><td colspan="8" class="text-center text-muted py-4">Nenhuma venda registrada ainda.</td></tr>
       {% endfor %}
       </tbody>
     </table>

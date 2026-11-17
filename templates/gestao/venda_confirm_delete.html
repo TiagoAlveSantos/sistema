@@ -18,6 +18,13 @@
           Esta ação apagará o registro da venda e <strong>devolverá todos os itens automaticamente para o estoque</strong>.
         </p>
 
+        {% with pg=object.pagamentos_resumo %}{% if pg.pago > 0 %}
+          <p class="small text-warning-emphasis bg-warning-subtle rounded p-2 mb-3">
+            Atenção: já foram recebidos R$ {{ pg.pago|floatformat:"2g" }} desta venda.
+            Ao reverter, o registro dos pagamentos também será apagado.
+          </p>
+        {% endif %}{% endwith %}
+
         <form method="post">
           {% csrf_token %}
           <div class="d-flex justify-content-center gap-2">

@@ -76,6 +76,31 @@
       </div>
     </div>
   </div>
+  <div class="col">
+    <div class="card shadow-sm h-100 border-start border-success border-4">
+      <div class="card-body">
+        <div class="text-muted small">Recebido{{ sufixo }} <span title="Pagamentos confirmados, pela data do pagamento">&#9432;</span></div>
+        <div class="metric-value">R$ {{ recebido|floatformat:"2g" }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card shadow-sm h-100 border-start border-warning border-4">
+      <div class="card-body">
+        <div class="text-muted small">A receber{{ sufixo }} <span title="Pagamentos pendentes, pelo vencimento">&#9432;</span></div>
+        <div class="metric-value">R$ {{ a_receber|floatformat:"2g" }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card shadow-sm h-100 border-start border-danger border-4">
+      <div class="card-body">
+        <div class="text-muted small">Em atraso (vencidos e não pagos)</div>
+        <div class="metric-value {% if atrasado > 0 %}text-danger{% endif %}">R$ {{ atrasado|floatformat:"2g" }}</div>
+        {% if atrasado > 0 %}<a href="{% url 'gestao:venda_list' %}?pagamento=atrasado" class="small">Ver vendas</a>{% endif %}
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="d-flex flex-wrap gap-2 mt-4">

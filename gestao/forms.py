@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 
 from django import forms
 
@@ -7,9 +8,10 @@ from django.utils import timezone
 from accounts.forms import BootstrapFormMixin
 
 from django.core.validators import MaxValueValidator
+from django.db.models.functions import Lower
 
 from .limites import PRECO_MAX, QTD_MAX
-from .models import Cliente, Produto, Prospeccao, Venda
+from .models import Cliente, Pagamento, Produto, Prospeccao, Venda
 
 
 _TELEFONE_RE = re.compile(r"^[0-9+()\-\s.]{6,30}$")
@@ -227,7 +229,12 @@ class ItemVendaForm(BootstrapFormMixin, forms.Form):
     def __init__(self, *args, usuario, **kwargs):
         super().__init__(*args, **kwargs)
         # Só itens DO usuário e com estoque: IDs de outros usuários são rejeitados.
-        qs = Produto.objects.do_usuario(usuario).filter(quantidade__gt=0)
+        # Em ordem alfabética (sem diferenciar maiúsculas/minúsculas)
+        qs = (
+            Produto.objects.do_usuario(usuario)
+            .filter(quantidade__gt=0)
+            .order_by(Lower("nome"), "pk")
+        )
         self.fields["produto"].queryset = qs
         self.fields["produto"].label_from_instance = (
             lambda p: f"{p.nome} (estoque: {p.quantidade})"
@@ -240,7 +247,23 @@ class ItemVendaForm(BootstrapFormMixin, forms.Form):
         return cleaned
 
 
-class BaseItemVendaFormSet(forms.BaseFormSet):
+class SemLinhasFantasmaMixin:
+    """
+    O navegador numera as linhas e nunca renumera: ao remover uma linha, o POST traz um
+    "buraco" no índice (TOTAL_FORMS maior que as linhas enviadas). Ao reexibir o formulário
+    com erro, esse buraco viraria uma linha em branco. `forms_visiveis` o descarta.
+    """
+
+    def forms_visiveis(self):
+        if not self.is_bound:
+            return list(self.forms)
+        return [
+            f for f in self.forms
+            if any(f.add_prefix(nome) in self.data for nome in f.fields)
+        ]
+
+
+class BaseItemVendaFormSet(SemLinhasFantasmaMixin, forms.BaseFormSet):
     def clean(self):
         if any(self.errors):
             return
@@ -288,3 +311,74 @@ def itens_da_formset(formset):
             }
         )
     return itens
+
+
+# --------------------------------------------------------------------------
+# Pagamentos da venda
+# --------------------------------------------------------------------------
+class PagamentoForm(BootstrapFormMixin, forms.Form):
+    """Uma linha de pagamento: meio, valor, data (pagamento ou vencimento) e se já foi pago."""
+
+    # Sem `initial` nos campos: linhas removidas no navegador (índices "furados" no POST)
+    # precisam parecer vazias para o formset ignorá-las. Os padrões vêm da view/JS.
+    metodo = forms.ChoiceField(choices=Pagamento.Metodo.choices, label="Meio")
+    valor = forms.DecimalField(
+        min_value=Decimal("0.01"),
+        # Sem teto aqui de propósito: o limite do TOTAL é checado pelo serviço, que dá a
+        # mensagem clara ("grande demais"); um pagamento fora do total nunca fecha a conta.
+        max_digits=20,
+        decimal_places=2,
+        label="Valor (R$)",
+        widget=forms.NumberInput(attrs={"min": "0.01", "step": "0.01"}),
+    )
+    data = forms.DateField(
+        label="Data",
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+    )
+    pago = forms.BooleanField(required=False, label="Já pago")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["pago"].widget.attrs["class"] = "form-check-input"
+
+    def clean(self):
+        cleaned = super().clean()
+        data, pago = cleaned.get("data"), cleaned.get("pago")
+        if data and pago and data > timezone.localdate():
+            self.add_error(
+                "data", "Pagamento já recebido não pode ter data futura. Desmarque “Já pago”."
+            )
+        return cleaned
+
+
+class BasePagamentoFormSet(SemLinhasFantasmaMixin, forms.BaseFormSet):
+    def initial_form_count(self):
+        # Ao receber o POST, todas as linhas são tratadas como "novas": o serviço
+        # SUBSTITUI os pagamentos. Assim, linhas removidas no navegador somem sem erro.
+        if self.is_bound:
+            return 0
+        return super().initial_form_count()
+
+
+# Sem linhas extras: as linhas iniciais vêm de `initial` (ou são criadas pelo JS).
+PagamentoFormSet = forms.formset_factory(
+    PagamentoForm, formset=BasePagamentoFormSet, extra=0
+)
+
+
+def pagamentos_da_formset(formset):
+    """Converte as linhas válidas do formset na lista esperada pelos serviços."""
+    lista = []
+    for form in formset.forms:
+        dados = getattr(form, "cleaned_data", None)
+        if not dados:
+            continue
+        lista.append(
+            {
+                "metodo": dados["metodo"],
+                "valor": dados["valor"],
+                "data": dados["data"],
+                "pago": dados.get("pago", False),
+            }
+        )
+    return lista

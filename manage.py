@@ -10,8 +10,9 @@ def main():
         from django.core.management import execute_from_command_line
     except ImportError as exc:
         raise ImportError(
-            "Django não encontrado. Execute o install.bat (ou ative o ambiente "
-            "virtual) antes de rodar este comando."
+            "Django não encontrado. Ative o ambiente virtual "
+            "(source venv/bin/activate) e instale as dependências "
+            "(pip install -r requirements.txt) antes de rodar este comando."
         ) from exc
     execute_from_command_line(sys.argv)
 

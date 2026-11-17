@@ -149,6 +149,39 @@ class Venda(models.Model):
     def __str__(self):
         return f"Venda #{self.pk}"
 
+    def pagamentos_resumo(self):
+        """
+        Situação dos pagamentos, calculada em Python sobre `self.pagamentos.all()`
+        (use prefetch_related("pagamentos") nas listas para não gerar consultas extras).
+        estado: quitado | pendente | atrasado | ajustar (pagamentos não fecham com o total).
+        """
+        hoje = timezone.localdate()
+        zero = Decimal("0.00")
+        pago = pendente = atrasado = zero
+        for p in self.pagamentos.all():
+            if p.pago:
+                pago += p.valor
+            else:
+                pendente += p.valor
+                if p.data < hoje:
+                    atrasado += p.valor
+        if pago + pendente != self.total:
+            estado = "ajustar"
+        elif pendente == 0:
+            estado = "quitado"
+        elif atrasado > 0:
+            estado = "atrasado"
+        else:
+            estado = "pendente"
+        return {
+            "estado": estado,
+            "pago": pago,
+            "pendente": pendente,
+            "atrasado": atrasado,
+            "soma": pago + pendente,
+            "diferenca": self.total - (pago + pendente),
+        }
+
     def calcular_totais(self):
         """(total, lucro) da venda = soma dos itens (sem gravar)."""
         zero = Value(Decimal("0.00"))
@@ -216,3 +249,44 @@ class ItemVenda(models.Model):
     def save(self, *args, **kwargs):
         self.calcular_valores()
         super().save(*args, **kwargs)
+
+
+class PagamentoQuerySet(models.QuerySet):
+    def do_usuario(self, usuario):
+        # O pagamento pertence ao dono da venda.
+        return self.filter(venda__usuario=usuario)
+
+
+class Pagamento(models.Model):
+    """
+    Uma linha de pagamento da venda. As linhas (pagas + pendentes) devem somar o
+    total da venda. `data` é a data em que foi pago (se pago) ou o vencimento
+    (se pendente).
+    """
+
+    class Metodo(models.TextChoices):
+        PIX = "pix", "Pix"
+        DINHEIRO = "dinheiro", "Dinheiro"
+        CREDITO = "credito", "Cartão de crédito"
+        DEBITO = "debito", "Cartão de débito"
+        TRANSFERENCIA = "transferencia", "Transferência"
+        BOLETO = "boleto", "Boleto"
+        OUTRO = "outro", "Outro"
+
+    venda = models.ForeignKey(Venda, on_delete=models.CASCADE, related_name="pagamentos")
+    metodo = models.CharField(
+        "Meio de pagamento", max_length=20, choices=Metodo.choices, default=Metodo.OUTRO
+    )
+    valor = models.DecimalField("Valor", max_digits=14, decimal_places=2)
+    data = models.DateField("Data")
+    pago = models.BooleanField("Pago", default=False)
+
+    objects = PagamentoQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["data", "id"]
+        verbose_name = "pagamento"
+        verbose_name_plural = "pagamentos"
+
+    def __str__(self):
+        return f"{self.get_metodo_display()} R$ {self.valor} ({'pago' if self.pago else 'pendente'})"
