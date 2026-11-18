@@ -21,7 +21,10 @@ Sistema web multiusuário para pequenos vendedores (revendedores de cosméticos,
   - **Lista:** uma linha por venda; a setinha à esquerda abre os itens daquela venda.
   - **Edição:** o produto e o custo de cada item ficam travados; é possível mudar quantidade e preço (respeitando o estoque), o cliente e a data, e adicionar itens novos.
   - **Reverter:** reverte a venda inteira ou **um item** individualmente (o estoque volta). Se sobrar um único item, só a reversão da venda inteira é oferecida.
-- **Dashboard:** vendas, lucro, prospecções, clientes e clientes distintos que compraram, com **filtro de ano e de mês** (só aparecem períodos com vendas, ou "Todos"), e o **valor atual do estoque a preço de custo**.
+  - **Pagamentos:** cada venda pode ser paga por vários meios e em várias datas (Pix, dinheiro, cartão…, à vista ou **parcelada**), cada linha **paga** ou **pendente** para uma data. A soma precisa fechar com o total. Pendências são confirmadas na lista de vendas ("Confirmar recebimento"); há filtro por situação (pendente, atrasado, quitado, a ajustar).
+  - **PDF da venda:** botão "PDF" em cada venda gera um resumo para enviar ao cliente (itens, valores, o que já foi pago, o que está em aberto e o vencimento de cada parcela). Nunca mostra custo nem lucro.
+- **Clientes:** lista em ordem alfabética e botão **Histórico**, que abre por cima da lista as compras do cliente (total comprado, valor em aberto).
+- **Dashboard:** vendas, lucro, prospecções, clientes e clientes distintos que compraram, com **filtro de ano e de mês** (só aparecem períodos com vendas, ou "Todos"), e o **valor atual do estoque a preço de custo**. Também mostra **Recebido**, **A receber** e **Em atraso**.
 
 ## Tecnologias
 

@@ -18,6 +18,11 @@ django-axes==9.0.0
 django-ipware==8.0.0
 python-ipware==4.1.1
 
+# PDF da venda (e as bibliotecas que ele usa)
+reportlab==5.0.1
+pillow==12.3.0
+charset-normalizer==3.5.1
+
 # Dependências do Django e fusos horários
 asgiref==3.13.0
 sqlparse==0.6.1

@@ -3,16 +3,17 @@ from decimal import Decimal
 
 
 from django.contrib import messages
-from django.http import HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, DecimalField, ProtectedError, ExpressionWrapper, F, Q, Sum, Value
-from django.db.models.functions import Coalesce, TruncMonth
+from django.db.models.functions import Coalesce, Lower, TruncMonth
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.utils.formats import number_format
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.generic import CreateView, DeleteView, ListView, UpdateView, View
+from django.utils.text import slugify
+from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView, View
 
 from accounts.permissions import UsuarioComumMixin
 
@@ -187,7 +188,8 @@ class ClienteListView(DonoQuerysetMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        # Ordem alfabética garantida (sem diferenciar maiúsculas/minúsculas)
+        qs = super().get_queryset().order_by(Lower("nome"), "pk")
         self.busca = self.request.GET.get("q", "").strip()
         if self.busca:
             qs = qs.filter(
@@ -375,6 +377,8 @@ class VendaListView(DonoQuerysetMixin, ListView):
             .get_queryset()
             .select_related("cliente")
             .prefetch_related("itens__produto", "pagamentos")
+            # explícito: com annotate() o Meta.ordering deixa de valer e a paginação embaralha
+            .order_by("-data_venda", "-pk")
         )
 
         # Filtro por situação do pagamento (?pagamento=...); valor inválido é ignorado
@@ -678,3 +682,63 @@ class PagamentoConfirmarView(_PagamentoAcaoView):
 
 class PagamentoDesfazerView(_PagamentoAcaoView):
     pago = False
+
+
+class VendaPdfView(UsuarioComumMixin, View):
+    """PDF da venda para enviar ao cliente (só do dono; nunca mostra custo/lucro)."""
+
+    def get(self, request, pk):
+        venda = get_object_or_404(
+            Venda.objects.do_usuario(request.user)
+            .select_related("cliente")
+            .prefetch_related("itens__produto", "pagamentos"),
+            pk=pk,
+        )
+        if venda.pagamentos_resumo()["estado"] == "ajustar":
+            messages.warning(
+                request,
+                "Os pagamentos desta venda não fecham com o total. Ajuste-os na edição "
+                "antes de gerar o PDF, para não enviar valores errados ao cliente.",
+            )
+            return redirect("gestao:venda_update", pk=venda.pk)
+        try:
+            from .pdf import dados_pdf_venda, renderizar
+        except ImportError:
+            messages.error(request, "Biblioteca de PDF não instalada (reportlab). Veja o requirements.txt.")
+            return redirect("gestao:venda_list")
+
+        emissor = request.user.get_full_name().strip() or request.user.get_username()
+        conteudo = renderizar(dados_pdf_venda(venda, emissor))
+        nome = f"venda-{slugify(venda.cliente.nome) or 'cliente'}-{timezone.localtime(venda.data_venda):%Y%m%d}.pdf"
+        resposta = HttpResponse(conteudo, content_type="application/pdf")
+        resposta["Content-Disposition"] = f'inline; filename="{nome}"'
+        resposta["Cache-Control"] = "private, no-store"
+        return resposta
+
+
+class ClienteHistoricoView(DonoQuerysetMixin, DetailView):
+    """Histórico de compras de UM cliente. Pedido por fetch (pop-up) devolve só o miolo."""
+
+    model = Cliente
+    LIMITE = 50
+
+    def get_template_names(self):
+        if self.request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return ["gestao/_cliente_historico.html"]
+        return ["gestao/cliente_historico.html"]
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        usuario, cliente = self.request.user, self.object
+        todas = Venda.objects.do_usuario(usuario).filter(cliente=cliente)
+        ctx["vendas"] = list(
+            todas.prefetch_related("itens__produto", "pagamentos").order_by("-data_venda", "-pk")[: self.LIMITE]
+        )
+        ctx["qtd_vendas"] = todas.count()
+        ctx["total_comprado"] = todas.aggregate(t=_soma("total"))["t"]
+        abertos = Pagamento.objects.do_usuario(usuario).filter(venda__cliente=cliente, pago=False)
+        ctx["em_aberto"] = abertos.aggregate(t=_soma("valor"))["t"]
+        ctx["em_atraso"] = abertos.filter(data__lt=timezone.localdate()).aggregate(t=_soma("valor"))["t"]
+        ctx["limitado"] = ctx["qtd_vendas"] > self.LIMITE
+        ctx["limite"] = self.LIMITE
+        return ctx

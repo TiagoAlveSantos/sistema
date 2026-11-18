@@ -78,6 +78,7 @@
           <td class="text-center text-nowrap">
             <div class="btn-group btn-group-sm" role="group">
               <a href="{% url 'gestao:venda_update' v.pk %}" class="btn btn-outline-primary" title="Editar">Editar</a>
+              <a href="{% url 'gestao:venda_pdf' v.pk %}" target="_blank" rel="noopener" class="btn btn-outline-secondary" title="Gerar PDF para enviar ao cliente">PDF</a>
               <a href="{% url 'gestao:venda_delete' v.pk %}" class="btn btn-outline-danger" title="Reverter a venda inteira">Reverter venda</a>
             </div>
           </td>
@@ -134,7 +135,7 @@
                         {% else %}<span class="badge text-bg-warning">Vence em {{ p.data|date:"d/m/Y" }}</span>{% endif %}
                       </td>
                       <td class="text-end text-nowrap">
-                        <form method="post" class="d-inline"
+                        <form method="post" class="d-inline form-pgto"
                               action="{% if p.pago %}{% url 'gestao:pagamento_desfazer' p.pk %}{% else %}{% url 'gestao:pagamento_confirmar' p.pk %}{% endif %}">
                           {% csrf_token %}
                           <input type="hidden" name="next" value="{{ request.get_full_path }}">
@@ -168,6 +169,35 @@
 
 {% block scripts %}
 <script>
+// Ao confirmar/desfazer um pagamento a página recarrega: guarda quais vendas estavam abertas
+// (e a posição da rolagem) e restaura, para os detalhes não fecharem sozinhos.
+(function () {
+  var CHAVE = 'vendasAbertas';
+  document.querySelectorAll('form.form-pgto').forEach(function (f) {
+    f.addEventListener('submit', function () {
+      try {
+        var ids = Array.prototype.map.call(
+          document.querySelectorAll('.collapse.show[id^="itens-"]'), function (e) { return e.id; });
+        sessionStorage.setItem(CHAVE, JSON.stringify({ ids: ids, y: window.scrollY }));
+      } catch (e) { /* sem armazenamento: só não restaura */ }
+    });
+  });
+  try {
+    var salvo = JSON.parse(sessionStorage.getItem(CHAVE) || 'null');
+    sessionStorage.removeItem(CHAVE);
+    if (salvo) {
+      salvo.ids.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) { return; }
+        el.classList.add('show');
+        var b = document.querySelector('[data-bs-target="#' + id + '"]');
+        if (b) { b.setAttribute('aria-expanded', 'true'); b.querySelector('.seta').innerHTML = '&#9662;'; }
+      });
+      window.scrollTo(0, salvo.y || 0);
+    }
+  } catch (e) { /* ignora */ }
+})();
+
 // Gira a setinha quando o detalhe da venda abre/fecha
 document.querySelectorAll('.collapse[id^="itens-"]').forEach(function (el) {
   var seta = document.querySelector('[data-bs-target="#' + el.id + '"] .seta');

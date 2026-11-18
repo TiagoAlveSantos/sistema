@@ -91,7 +91,7 @@
                 </div>
                 <div class="col-6 col-md-3">
                   <label class="form-label small mb-1" for="parc-data">1ª parcela em</label>
-                  <input type="date" id="parc-data" class="form-control">
+                  <input type="text" id="parc-data" class="form-control" autocomplete="off">
                 </div>
                 <div class="col-6 col-md-4">
                   <div class="form-check mb-1">
@@ -245,7 +245,16 @@ function centavos(txt) {
     presumo.classList.remove('d-none');
   }
 
+  // Datas sempre como dd/mm/aaaa na tela (o campo guarda AAAA-MM-DD, que o servidor lê)
+  function dataBR(input) {
+    flatpickr(input, {
+      dateFormat: 'Y-m-d', altInput: true, altFormat: 'd/m/Y', altInputClass: 'form-control',
+      locale: 'pt', disableMobile: true, allowInput: false, defaultDate: input.value || null
+    });
+  }
+
   function ligarPgto(linha) {
+    dataBR(pfield(linha, 'data'));
     var valor = pfield(linha, 'valor');
     if (valor.value) { linha.dataset.manual = '1'; }
     valor.addEventListener('input', function () { linha.dataset.manual = '1'; atualizarPgtos(); });
@@ -282,6 +291,7 @@ function centavos(txt) {
   });
 
   document.getElementById('parc-data').value = hojeISO();
+  dataBR(document.getElementById('parc-data'));
   document.getElementById('btn-parcelar').addEventListener('click', function () {
     var n = parseInt(document.getElementById('parc-n').value, 10);
     var primeira = document.getElementById('parc-data').value;

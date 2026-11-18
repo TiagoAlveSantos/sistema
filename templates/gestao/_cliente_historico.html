@@ -1,0 +1,63 @@
+{# Miolo do histórico de compras de um cliente. Contexto: cliente, vendas, qtd_vendas, total_comprado, em_aberto, em_atraso. #}
+<div class="row g-2 mb-3 text-center">
+  <div class="col-4">
+    <div class="border rounded p-2 h-100">
+      <div class="small text-muted">Compras</div>
+      <div class="fw-semibold">{{ qtd_vendas }}</div>
+    </div>
+  </div>
+  <div class="col-4">
+    <div class="border rounded p-2 h-100">
+      <div class="small text-muted">Total comprado</div>
+      <div class="fw-semibold">R$ {{ total_comprado|floatformat:"2g" }}</div>
+    </div>
+  </div>
+  <div class="col-4">
+    <div class="border rounded p-2 h-100 {% if em_atraso > 0 %}border-danger{% elif em_aberto > 0 %}border-warning{% endif %}">
+      <div class="small text-muted">Em aberto</div>
+      <div class="fw-semibold {% if em_atraso > 0 %}text-danger{% endif %}">R$ {{ em_aberto|floatformat:"2g" }}</div>
+      {% if em_atraso > 0 %}<div class="small text-danger">R$ {{ em_atraso|floatformat:"2g" }} em atraso</div>{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if vendas %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Data</th>
+          <th>Itens</th>
+          <th class="text-end">Total</th>
+          <th>Pagamento</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for v in vendas %}
+        {% with pg=v.pagamentos_resumo %}
+        <tr>
+          <td class="text-nowrap">{{ v.data_venda|date:"d/m/Y" }}</td>
+          <td class="small">{% for i in v.itens.all %}{{ i.quantidade }}× {{ i.produto.nome }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+          <td class="text-end text-nowrap">R$ {{ v.total|floatformat:"2g" }}</td>
+          <td class="text-nowrap">
+            {% if pg.estado == "quitado" %}<span class="badge text-bg-success">Quitado</span>
+            {% elif pg.estado == "atrasado" %}<span class="badge text-bg-danger">Atrasado</span> <span class="small text-muted">R$ {{ pg.pendente|floatformat:"2g" }}</span>
+            {% elif pg.estado == "pendente" %}<span class="badge text-bg-warning">Pendente</span> <span class="small text-muted">R$ {{ pg.pendente|floatformat:"2g" }}</span>
+            {% else %}<span class="badge text-bg-dark">Ajustar</span>{% endif %}
+          </td>
+          <td class="text-end">
+            {% if pg.estado != "ajustar" %}<a href="{% url 'gestao:venda_pdf' v.pk %}" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">PDF</a>{% endif %}
+          </td>
+        </tr>
+        {% endwith %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if limitado %}
+    <div class="form-text mt-2">Mostrando as {{ limite }} compras mais recentes de {{ qtd_vendas }}.</div>
+  {% endif %}
+{% else %}
+  <p class="text-muted text-center py-3 mb-0">Este cliente ainda não tem compras.</p>
+{% endif %}

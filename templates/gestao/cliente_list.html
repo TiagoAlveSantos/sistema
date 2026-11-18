@@ -30,6 +30,8 @@
           <td>{{ c.endereco|default:"—" }}</td>
           <td class="text-end text-nowrap">
             <a href="{% url 'gestao:cliente_update' c.pk %}" class="btn btn-outline-primary btn-sm">Editar</a>
+            <a href="{% url 'gestao:cliente_historico' c.pk %}" class="btn btn-outline-dark btn-sm btn-historico"
+               data-nome="{{ c.nome }}">Histórico</a>
             <a href="{% url 'gestao:prospeccao_create' %}?cliente={{ c.pk }}" class="btn btn-outline-secondary btn-sm">Prospecção</a>
           </td>
         </tr>
@@ -41,4 +43,50 @@
   </div>
 </div>
 {% include 'partials/paginacao.html' %}
+
+{# Pop-up do histórico: abre por cima da lista, sem sair da tela #}
+<div class="modal fade" id="modal-historico" tabindex="-1" aria-labelledby="modal-historico-titulo" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title h5" id="modal-historico-titulo">Histórico de compras</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body" id="modal-historico-corpo"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var el = document.getElementById('modal-historico');
+  var corpo = document.getElementById('modal-historico-corpo');
+  var titulo = document.getElementById('modal-historico-titulo');
+  var modal = bootstrap.Modal.getOrCreateInstance(el);
+  var pedido = 0;  // ignora respostas de um clique anterior
+
+  document.querySelectorAll('.btn-historico').forEach(function (botao) {
+    botao.addEventListener('click', function (ev) {
+      ev.preventDefault();  // sem JS o link abre a página completa do histórico
+      var meu = ++pedido;
+      titulo.textContent = 'Histórico de compras · ' + botao.dataset.nome;  // textContent: sem HTML
+      corpo.innerHTML = '<div class="text-center text-muted py-4">Carregando…</div>';
+      modal.show();
+      fetch(botao.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.text(); })
+        .then(function (html) { if (meu === pedido) { corpo.innerHTML = html; } })
+        .catch(function () {
+          if (meu === pedido) {
+            corpo.innerHTML = '<div class="alert alert-danger mb-0">Não foi possível carregar o histórico. Tente novamente.</div>';
+          }
+        });
+    });
+  });
+})();
+</script>
 {% endblock %}

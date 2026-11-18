@@ -333,7 +333,8 @@ class PagamentoForm(BootstrapFormMixin, forms.Form):
     )
     data = forms.DateField(
         label="Data",
-        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+        # Texto ISO (AAAA-MM-DD) que o Flatpickr mostra como dd/mm/aaaa na tela
+        widget=forms.DateInput(attrs={"autocomplete": "off"}, format="%Y-%m-%d"),
     )
     pago = forms.BooleanField(required=False, label="Já pago")
 

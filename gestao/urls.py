@@ -15,6 +15,11 @@ urlpatterns = [
         views.ClienteUpdateView.as_view(),
         name="cliente_update",
     ),
+    path(
+        "clientes/<int:pk>/historico/",
+        views.ClienteHistoricoView.as_view(),
+        name="cliente_historico",
+    ),
     # Prospecções
     path("prospeccoes/", views.ProspeccaoListView.as_view(), name="prospeccao_list"),
     path(
@@ -45,6 +50,7 @@ urlpatterns = [
     path("vendas/nova/", views.VendaCreateView.as_view(), name="venda_create"),
     path("vendas/<int:pk>/editar/", views.VendaUpdateView.as_view(), name="venda_update"),
     path("vendas/<int:pk>/excluir/", views.VendaDeleteView.as_view(), name="venda_delete"),
+    path("vendas/<int:pk>/pdf/", views.VendaPdfView.as_view(), name="venda_pdf"),
     path(
         "vendas/pagamento/<int:pk>/confirmar/",
         views.PagamentoConfirmarView.as_view(),

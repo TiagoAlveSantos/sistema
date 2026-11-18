@@ -1197,3 +1197,106 @@ class OrdemDosItensNaVendaTests(TestCase):
         resp = self.client.get(reverse("gestao:venda_create"))
         nomes = [p.nome for p in resp.context["formset"].forms[0].fields["produto"].queryset]
         self.assertEqual(nomes, ["abacate", "banana", "Cebola"])
+
+
+# ==========================================================================
+# Histórico do cliente, PDF da venda e ordem dos clientes
+# ==========================================================================
+@sem_axes
+class HistoricoPdfTests(TestCase):
+    def setUp(self):
+        self.user = criar_usuario("ana")
+        self.cliente = Cliente.objects.create(usuario=self.user, nome="João da Silva")
+        self.caneta = Produto.objects.create(
+            usuario=self.user, nome="Caneta", quantidade=50,
+            preco_compra=Decimal("2.00"), preco_venda=Decimal("5.00"),
+        )
+        hoje = timezone.localdate()
+        self.venda = registrar_venda(
+            usuario=self.user, cliente=self.cliente, itens=[item(self.caneta, 10, "10.00")],
+            pagamentos=[
+                {"metodo": "pix", "valor": Decimal("40.00"), "data": hoje, "pago": True},
+                {"metodo": "credito", "valor": Decimal("60.00"), "data": hoje + timedelta(days=30), "pago": False},
+            ],
+        )
+        self.client.login(username="ana", password=SENHA)
+        self.outro = criar_usuario("bia")
+
+    # ---- ordem alfabética dos clientes ----
+    def test_clientes_em_ordem_alfabetica_sem_diferenciar_maiusculas(self):
+        Cliente.objects.create(usuario=self.user, nome="bruno")
+        Cliente.objects.create(usuario=self.user, nome="Ana")
+        Cliente.objects.create(usuario=self.user, nome="carla")
+        resp = self.client.get(reverse("gestao:cliente_list"))
+        nomes = [c.nome for c in resp.context["object_list"]]
+        self.assertEqual(nomes, ["Ana", "bruno", "carla", "João da Silva"])
+
+    # ---- histórico ----
+    def test_historico_por_ajax_devolve_so_o_miolo(self):
+        resp = self.client.get(
+            reverse("gestao:cliente_historico", args=[self.cliente.pk]),
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "10× Caneta")
+        self.assertContains(resp, "R$ 60,00")  # em aberto
+        self.assertNotContains(resp, "<html")
+
+    def test_historico_sem_ajax_e_pagina_completa(self):
+        resp = self.client.get(reverse("gestao:cliente_historico", args=[self.cliente.pk]))
+        self.assertContains(resp, "<html")
+        self.assertContains(resp, "João da Silva")
+
+    def test_historico_de_cliente_de_outro_usuario_da_404(self):
+        self.client.logout()
+        self.client.login(username="bia", password=SENHA)
+        resp = self.client.get(reverse("gestao:cliente_historico", args=[self.cliente.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_lista_de_clientes_tem_botao_historico(self):
+        resp = self.client.get(reverse("gestao:cliente_list"))
+        self.assertContains(resp, reverse("gestao:cliente_historico", args=[self.cliente.pk]))
+
+    # ---- PDF ----
+    def test_pdf_da_venda(self):
+        resp = self.client.get(reverse("gestao:venda_pdf", args=[self.venda.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/pdf")
+        self.assertTrue(resp.content.startswith(b"%PDF"))
+        self.assertIn("joao-da-silva", resp["Content-Disposition"])
+        self.assertIn("no-store", resp["Cache-Control"])
+
+    def test_dados_do_pdf_nao_vazam_custo_nem_lucro(self):
+        from .pdf import dados_pdf_venda
+
+        venda = Venda.objects.prefetch_related("itens__produto", "pagamentos").get(pk=self.venda.pk)
+        dados = dados_pdf_venda(venda, "Ana")
+        texto = repr(dados).lower()
+        self.assertNotIn("custo", texto)
+        self.assertNotIn("lucro", texto)
+        self.assertEqual(dados["aberto"], "R$ 60,00")
+        self.assertEqual(dados["pago"], "R$ 40,00")
+        self.assertFalse(dados["quitado"])
+        self.assertEqual(len(dados["pagamentos"]), 2)
+
+    def test_pdf_de_venda_de_outro_usuario_da_404(self):
+        self.client.logout()
+        self.client.login(username="bia", password=SENHA)
+        resp = self.client.get(reverse("gestao:venda_pdf", args=[self.venda.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_pdf_com_pagamentos_que_nao_fecham_vai_para_a_edicao(self):
+        self.venda.pagamentos.update(valor=Decimal("1.00"))
+        resp = self.client.get(reverse("gestao:venda_pdf", args=[self.venda.pk]))
+        self.assertRedirects(resp, reverse("gestao:venda_update", args=[self.venda.pk]))
+
+    def test_pdf_com_nome_malicioso_nao_quebra(self):
+        self.cliente.nome = "<b>Ana</b> <font size=99999>& <img src=x>"
+        self.cliente.save()
+        resp = self.client.get(reverse("gestao:venda_pdf", args=[self.venda.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.content.startswith(b"%PDF"))
+
+    def test_lista_de_vendas_tem_botao_pdf(self):
+        resp = self.client.get(reverse("gestao:venda_list"))
+        self.assertContains(resp, reverse("gestao:venda_pdf", args=[self.venda.pk]))
